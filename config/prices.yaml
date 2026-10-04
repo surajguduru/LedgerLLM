@@ -1,0 +1,13 @@
+# Versioned price table. Every usage_ledger row records price_version, so any past bill is reproducible.
+# Units: USD per 1M tokens (list prices, paid tier). We bill tenants at list price even when the platform itself
+# runs on a provider's free tier — that difference is the platform's margin, and it keeps bills stable if we move tiers.
+# cost_microusd = input_tokens * input_usd_per_mtok + output_tokens * output_usd_per_mtok  (exact integer arithmetic)
+version: "2026-10-04"
+models:
+  mock:                   { input_usd_per_mtok: 0.75, output_usd_per_mtok: 3.75 }   # priced like gemini-3.8-flash so load tests book realistic $
+  gemini-3.8-flash:       { input_usd_per_mtok: 0.75, output_usd_per_mtok: 3.75 }
+  gemini-3.5-flash-lite:  { input_usd_per_mtok: 0.30, output_usd_per_mtok: 2.50 }
+  gemini-3.1-flash-lite:  { input_usd_per_mtok: 0.25, output_usd_per_mtok: 1.50 }
+  claude-haiku-4-5:       { input_usd_per_mtok: 1.00, output_usd_per_mtok: 5.00 }
+  claude-sonnet-5-5:      { input_usd_per_mtok: 2.00, output_usd_per_mtok: 10.00 }
+  claude-opus-5-5:        { input_usd_per_mtok: 4.00, output_usd_per_mtok: 20.00 }

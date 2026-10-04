@@ -1,0 +1,21 @@
+# Render Blueprint: "New +" -> "Blueprint" -> point at this repo. Fill DATABASE_URL (Neon) and LLM_API_KEY (Gemini) in the dashboard.
+services:
+  - type: web
+    name: ledgerllm
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GUARDRAILS_MODE
+        value: enforce
+      - key: DATABASE_URL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: ADMIN_TOKEN
+        generateValue: true

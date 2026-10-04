@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.sqlite
+.env
+.seed_keys.json
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+loadtest/results*
+evals/**/results/
+.DS_Store
+# team-internal planning docs live outside the repo; never commit them
+team-private/
+private/
