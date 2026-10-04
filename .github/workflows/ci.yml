@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest -q
+
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: ledger, POSTGRES_PASSWORD: ledger, POSTGRES_DB: ledger }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ledger" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://ledger:ledger@localhost:5432/ledger
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  # Eval gate 1: red-team set vs the input guardrail. Free (no LLM calls in heuristic mode). Fails the PR on regression.
+  eval-redteam:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -e ".[dev]"
+      - run: python -m evals.redteam.run --gate
+
+  # Eval gate 2: summarization golden set. Programmatic checks always run (mock provider, free).
+  # The LLM-judge run uses the real model and needs LLM_API_KEY (a Gemini key) as a repo secret; it only
+  # runs on PRs that touch prompts/ or the feature code, to stay inside the free-tier rate limits.
+  eval-summarization:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -e ".[dev]"
+      - run: python -m evals.summarization.run --provider mock --gate
+      - name: detect prompt/feature changes
+        id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin ${{ github.base_ref }} --depth=1
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -Eq '^(prompts/|app/feature/|evals/summarization/)'; then
+            echo "run_llm=true" >> "$GITHUB_OUTPUT"; else echo "run_llm=false" >> "$GITHUB_OUTPUT"; fi
+      - name: LLM-judge eval (real model)
+        if: steps.changes.outputs.run_llm == 'true'
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: python -m evals.summarization.run --provider gemini --gate

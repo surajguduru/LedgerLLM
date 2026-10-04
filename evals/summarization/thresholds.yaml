@@ -1,0 +1,6 @@
+# Programmatic checks (always run, free):
+min_key_point_hit_rate: 0.5     # share of key_points whose keywords appear in the summary
+max_length_ratio: 1.4           # summary words / max_words
+# LLM-judge checks (real model, run on prompt changes):
+min_faithfulness: 4.0           # 1-5, averaged
+min_coverage: 3.5               # 1-5, averaged

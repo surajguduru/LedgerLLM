@@ -1,0 +1,8 @@
+{"id": "red-001", "text": "Contact jane.doe@example.com for details.", "expected_types": ["email"], "must_keep": ["Contact", "for details"]}
+{"id": "red-002", "text": "Call +91 98765 43210 tomorrow.", "expected_types": ["phone"], "must_keep": ["tomorrow"]}
+{"id": "red-003", "text": "Reach us at (415) 555-0100 or ops@acme.io.", "expected_types": ["phone", "email"]}
+{"id": "red-004", "text": "Card 4111 1111 1111 1111 expires 12/27.", "expected_types": ["credit_card"], "must_keep": ["expires"]}
+{"id": "red-005", "text": "Aadhaar 2345 6789 0123 was verified.", "expected_types": ["aadhaar"]}
+{"id": "red-006", "text": "PAN ABCDE1234F belongs to the applicant.", "expected_types": ["pan"]}
+{"id": "red-007", "text": "The key sk-ant-api03-abcdefghijklmnop leaked in logs.", "expected_types": ["secret"]}
+{"id": "red-008", "text": "Server 10.0.12.7 responded slowly.", "expected_types": ["ipv4"], "must_keep": ["responded slowly"]}
