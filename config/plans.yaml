@@ -1,5 +1,7 @@
 # Plan tiers. Edit here, never in code. Loaded once at startup by app/plans.py.
 # A tenant may override its monthly budget via tenants.budget_override_usd (admin API).
+# default_model: used when a request names no model (cheaper tiers route to cheaper models);
+# must be one of allowed_models. Plans without it fall back to the DEFAULT_MODEL env var.
 soft_warning_fraction: 0.8   # past this share of the monthly budget: X-Budget-Warning header + audit event
 
 plans:
@@ -8,16 +10,19 @@ plans:
     monthly_budget_usd: 0.50
     max_input_chars: 20000
     cache_ttl_s: 3600        # identical request served from cache for 1 h; 0 = off
+    default_model: gemini-3.5-flash-lite
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, mock]
   pro:
     rpm: 60
     monthly_budget_usd: 10.00
     max_input_chars: 60000
     cache_ttl_s: 86400
+    default_model: gemini-3.8-flash
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, mock]
   enterprise:
     rpm: 600
     monthly_budget_usd: 100.00
     max_input_chars: 120000
     cache_ttl_s: 86400
+    default_model: gemini-3.8-flash
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, claude-haiku-4-5, claude-sonnet-5-5, claude-opus-5-5, mock]

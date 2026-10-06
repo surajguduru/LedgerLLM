@@ -48,7 +48,9 @@ make dev
 ```
 Any OpenAI-compatible endpoint works the same way (`LLM_PROVIDER=groq|openai|openrouter|ollama`, or
 `openai_compat` with `LLM_BASE_URL`); Anthropic is supported through its official SDK (`LLM_PROVIDER=anthropic`).
-The default model is `gemini-3.8-flash`; `DEFAULT_MODEL` and the per-plan `allowed_models` are in `config/`.
+Each plan routes to its own default model when a request names none (free → `gemini-3.5-flash-lite`, pro and
+enterprise → `gemini-3.8-flash`); `default_model` and `allowed_models` per plan are in `config/plans.yaml`, and
+`DEFAULT_MODEL` is the fallback for plans without one.
 
 <details>
 <summary>Without <code>make</code> (Windows PowerShell)</summary>
