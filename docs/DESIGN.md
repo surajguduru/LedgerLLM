@@ -87,7 +87,7 @@ All money is integer micro-USD. All IDs are UUID strings. Every table holding te
 `tenants` · `api_keys` (sha256 of the key, display prefix) · `rate_limit_windows` (key, minute → count) ·
 `budget_periods` (tenant, YYYY-MM → hard_limit, spent, reserved, soft_warned_at) · `usage_ledger` (one row per
 billable call: purpose, model, tokens, cost, price_version, prompt_version, latency) · `idempotency_records` ·
-`audit_events` · `request_logs` (redacted) · `feedback` · `response_cache` (planned).
+`audit_events` · `request_logs` (redacted) · `feedback` · `response_cache` (tenant, key → summary, model, prompt version, tokens, hits, expires_at).
 
 ### 2.4 Deployment
 ```
@@ -117,6 +117,7 @@ Local: docker compose = app + postgres + prometheus + grafana
 | D12 | API keys stored as sha256; prefix for display | Plaintext or reversible encryption | A database leak does not leak keys | Keys are shown once |
 | D13 | Idempotency scoped per tenant; body-hash mismatch → 409; only 200s stored | Global keys; store errors | Tenant isolation; failed calls should be retried, not replayed | Clients need a new key for a changed body |
 | D14 | Dashboard served by the API | Separate Streamlit app | One deployable, one URL | Minimal UI |
+| D16 | Exact-match response cache per tenant, checked after content is acquired and before the budget reserve; a hit is free and booked as a zero-cost ledger row with status `cached`; TTL per plan; anything a guardrail flagged (even in shadow mode) is never stored; `Cache-Control: no-cache` bypasses it and `RESPONSE_CACHE_ENABLED=false` switches it off | Bill hits at full or a flat fee; cache before fetching; semantic cache | The tenant asked for nothing new and we spent nothing, so charging would be rent; keying on the extracted text, model and prompt hash means a changed page, model or prompt can never serve a stale summary; a zero-cost row keeps request counts honest while token totals still match provider usage | Hits on URL requests still pay for the fetch; no cross-tenant sharing, so popular pages are summarised once per tenant; storage grows with TTL |
 
 **Failure modes.**
 | Failure | Behaviour | Evidence |

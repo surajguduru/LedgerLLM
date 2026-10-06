@@ -105,7 +105,7 @@ class UsageLedger(Base):
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="ok"
-    )  # ok|error|blocked
+    )  # ok|error|blocked|cached
 
 
 Index("ix_usage_ledger_tenant_created", UsageLedger.tenant_id, UsageLedger.created_at)
@@ -120,6 +120,25 @@ class IdempotencyRecord(Base):
     status_code: Mapped[int] = mapped_column(Integer, nullable=False)
     response_json: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ResponseCache(Base):
+    """Exact-match response cache. Owner: Suraj. Key = sha256(tenant, model, prompt hash, options, text)."""
+
+    __tablename__ = "response_cache"
+
+    tenant_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(String(80), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class AuditEvent(Base):

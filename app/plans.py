@@ -27,6 +27,7 @@ class Plan:
     monthly_budget_microusd: int
     max_input_chars: int
     allowed_models: tuple[str, ...]
+    cache_ttl_s: int = 0  # response cache lifetime; 0 = cache off for this plan
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ def load_plans() -> PlanCatalog:
             monthly_budget_microusd=usd_to_microusd(float(p["monthly_budget_usd"])),
             max_input_chars=int(p["max_input_chars"]),
             allowed_models=tuple(p.get("allowed_models", [])),
+            cache_ttl_s=int(p.get("cache_ttl_s", 0)),
         )
         for name, p in raw["plans"].items()
     }

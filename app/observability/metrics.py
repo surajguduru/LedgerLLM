@@ -31,6 +31,9 @@ GUARDRAIL = Counter(
     "ledgerllm_guardrail_verdicts_total", "Guardrail verdicts", ["stage", "blocked", "category"]
 )
 FEEDBACK = Counter("ledgerllm_feedback_total", "Thumbs up/down", ["rating"])
+CACHE = Counter(
+    "ledgerllm_cache_total", "Response cache lookups", ["result"]
+)  # hit | miss | bypass
 UPSTREAM_ERRORS = Counter(
     "ledgerllm_upstream_errors_total", "Provider errors", ["model", "retryable"]
 )
