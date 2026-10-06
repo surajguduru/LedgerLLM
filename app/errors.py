@@ -9,6 +9,7 @@ Codes and statuses (keep this table in sync with docs/DESIGN.md):
     400 blocked_input (guardrail)              400 fetch_blocked (SSRF guard)
     422 fetch_failed / validation_error        413 content_too_large
     409 idempotency_conflict                   502 upstream_error
+    409 idempotency_in_progress (+Retry-After)
     401 admin_unauthorized                     500 internal_error
 """
 
