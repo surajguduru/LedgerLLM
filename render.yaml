@@ -11,8 +11,12 @@ services:
         value: prod
       - key: LLM_PROVIDER
         value: gemini
-      - key: GUARDRAILS_MODE
+      - key: GUARDRAILS_MODE           # new guardrail layers ship as shadow first, then enforce
         value: enforce
+      - key: SUMMARIZE_PROMPT_VERSION  # prompt rollout and rollback: point at a prompts/*.yaml version
+        value: summarize_v1
+      - key: RESPONSE_CACHE_ENABLED    # false switches the response cache off without a deploy
+        value: "true"
       - key: DATABASE_URL
         sync: false
       - key: LLM_API_KEY
