@@ -57,6 +57,7 @@ Format: **what** · value · conditions · command · date · who.
 - Platform overhead (no model, sequential, mock, SQLite): p50 6/7/8 ms and max 9/9/11 ms for 1.2k/3.2k/6.2k-token documents · `latency_sample.py --per-size 20 --sleep 0` with `MOCK_LATENCY_MS=0` · 7 Oct · Yashraj — **target p99 ≤ 25 ms met**; overhead is roughly flat in document size.
 - Burst quota enforcement: **HOLDS**. 4,125 requests from 20 users at a $0.02 budget → 103 × 200, 4,022 × 402, 0 × 429 (limiter still a stub); ledger spent $0.019264 of $0.020000, reserved back to 0 · `make loadtest` + `verify_quota.py`, mock, `MOCK_LATENCY_MS=120`, SQLite · 7 Oct · Yashraj — preliminary, **re-run on Postgres** (SQLite serialises writes so it hides the race rather than winning it).
 - Reservation pessimism: $0.000736 of a $0.02 budget left unspent (~3.7 %) because the reserve books worst-case output tokens · same run · 7 Oct · Yashraj — this is the measured cost of D2.
+- Metric cardinality: 85 series (135 lines incl. HELP/TYPE) with 1 tenant, 1 model, mock provider · `curl /metrics` · 7 Oct · Yashraj — grows with tenants x models; the `tenant` label is DESIGN §5 limit #4.
 - Throughput: 270 req/s, p50 73 ms / p99 930 ms, 50 users, `MOCK_LATENCY_MS=0`, SQLite · 7 Oct · Yashraj — **target ≥ 50 req/s met**; the p99 is SQLite write-lock contention, not platform overhead (cf. 11 ms uncontended), i.e. DESIGN §5 limit #1 showing up.
 
 ## Trade-offs ("we chose X over Y because Z")
