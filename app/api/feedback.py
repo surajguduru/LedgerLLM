@@ -11,11 +11,32 @@ from app.compliance import audit as audit_events
 from app.compliance.audit import audit
 from app.db import get_db
 from app.errors import ApiError
-from app.models import Feedback, RequestLog
+from app.models import Feedback, RequestLog, UsageLedger
 from app.observability import metrics
 from app.schemas import FeedbackRequest
 
 router = APIRouter(prefix="/v1", tags=["feedback"])
+
+UNKNOWN_PROMPT = "unknown"
+
+
+def _prompt_version(db: Session, tenant_id: str, request_id: str) -> str:
+    """Which prompt produced the summary being rated.
+
+    The rating arrives with only a request_id, but request_logs does not store the prompt version --
+    the ledger does. One lookup on the completion row gives us the label, so the feedback metric can
+    be sliced per prompt version. Guardrail/judge rows are skipped: they did not write the summary.
+    """
+    return (
+        db.scalar(
+            select(UsageLedger.prompt_version).where(
+                UsageLedger.request_id == request_id,
+                UsageLedger.tenant_id == tenant_id,
+                UsageLedger.purpose == "completion",
+            )
+        )
+        or UNKNOWN_PROMPT
+    )
 
 
 @router.post("/feedback", status_code=201)
@@ -48,6 +69,8 @@ def feedback(
         actor="tenant",
         details={"rating": payload.rating},
     )
-    metrics.FEEDBACK.labels(payload.rating).inc()
+    metrics.FEEDBACK.labels(
+        payload.rating, _prompt_version(db, auth.tenant.id, payload.request_id)
+    ).inc()
     db.commit()
     return {"ok": True}

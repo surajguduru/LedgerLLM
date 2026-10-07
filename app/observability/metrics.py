@@ -30,7 +30,9 @@ LLM_LATENCY = Histogram(
 GUARDRAIL = Counter(
     "ledgerllm_guardrail_verdicts_total", "Guardrail verdicts", ["stage", "blocked", "category"]
 )
-FEEDBACK = Counter("ledgerllm_feedback_total", "Thumbs up/down", ["rating"])
+FEEDBACK = Counter(
+    "ledgerllm_feedback_total", "Thumbs up/down", ["rating", "prompt_version"]
+)  # prompt_version lets us compare satisfaction across prompt versions (quality signal, DESIGN.md §4)
 CACHE = Counter(
     "ledgerllm_cache_total", "Response cache lookups", ["result"]
 )  # hit | miss | bypass
