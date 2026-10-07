@@ -10,7 +10,7 @@ Branch: `feat/observability-dashboards-metrics`
 | A | Grafana dashboard JSON (+ screenshot) | ✅ JSON done · screenshot needs Docker |
 | C | Burst load test → `verify_quota.py` HOLDS | ✅ HOLDS on SQLite · Postgres re-run needs Docker |
 | D | Real-provider latency sample | ✅ script done · real numbers need a Gemini key |
-| B | Tenant `/dashboard` page | ⬜ next (day-chart blocked on Naresh's `by_day`) |
+| B | Tenant `/dashboard` page | ✅ done · 3 panels auto-enable when Naresh ships his fields |
 
 ## Headline numbers measured so far (7 Oct)
 
@@ -310,3 +310,94 @@ is one of the numbers I report (`curl /metrics | wc -l`).
 by a system that reserved budget and never released it — it would look compliant while slowly eating
 tenants' money. Reservations returning to zero proves every reserve was matched by a settle or a
 release, including on the error paths.
+
+---
+
+## Task B — Tenant dashboard (`/dashboard`)
+
+The operator dashboard (Grafana) answers "is the platform healthy". This one answers a different
+question for a different person: **"what am I being charged, and why?"** — the self-serve billing page
+a customer opens before they email support.
+
+Served by the API itself rather than as a separate Streamlit app: one deployable, one URL
+(decision **D14**). Dependency-free apart from Chart.js off a CDN, and nothing is written to browser
+storage, so the pasted key does not outlive the tab.
+
+### What is on it
+| Panel | Why it is there |
+|---|---|
+| Budget gauge (doughnut) | spent / reserved / remaining — **exactly the three numbers the budget check compares against the limit**, so the customer sees the same arithmetic the server does |
+| Committed % bar | `(spent + reserved) / limit`, which is what the soft-warning threshold actually fires on |
+| Summary cards | requests, tokens in/out, average cost per request |
+| Spend by day | where the month went |
+| By model | which model they used and what it cost |
+| By purpose | **who pays for what** (below) |
+| Recent requests | last 10, with 402/429 rows in red so a refusal is visible |
+| Soft-warning banner | shown past 80%, and says what happens next |
+| CSV statement | download for their own records |
+
+### The two details I would point at in a demo
+**1. Reserved is shown, not hidden.** Most billing pages show one "spent" number. Showing
+`reserved` separately makes reserve-then-settle (D2) visible to the customer: money is held while a
+request is in flight and released when it settles. Without it, a customer watching the page mid-burst
+would see "remaining" drop and then rise again and think the meter was broken. The page says
+explicitly: *"Reserved is budget held for requests still running. It returns to zero when each one
+settles or fails."*
+
+**2. The by-purpose table says who pays for what.** Three purposes, three different billing answers:
+- `completion` — the summary the tenant asked for. Billed.
+- `guardrail` — the safety classifier's *own* tokens. **Billed to the tenant** (D6: the budget is
+  reserved before the guardrail precisely so this spend can be attributed).
+- `judge` — our online quality sampling. **Not billed** (D17) — we are the ones who wanted the
+  measurement, so we pay for it.
+
+That is a real product decision made legible on the page, and it is the kind of thing a customer
+would otherwise dispute.
+
+### Shipping around a dependency instead of waiting for it
+Three panels need things Naresh has not shipped yet: `by_day` and `last_requests` on `GET /v1/usage`,
+and `GET /v1/usage/statement.csv`.
+
+Rather than block, each panel **feature-detects**: if the field is absent it renders a short note
+naming the owner; if present it renders for real. No change to this file when his work lands. The CSV
+button probes the route first, so a 404 shows a note instead of a dead button.
+
+This is the general pattern worth stating: **the consumer degrades, the producer does not get
+blocked.** It also means my task is finished and reviewable now, instead of sitting half-done waiting
+on someone else's PR.
+
+Implementation note: the CSV is fetched and turned into a `Blob` URL rather than linked directly,
+because the route authenticates with an `X-API-Key` **header** and a plain `<a href>` cannot send one.
+
+### How I verified it without a browser
+No browser automation available, so I checked it two ways:
+1. `node --check` on the extracted script — catches syntax errors.
+2. Ran the page's own `load()` in Node against a **real `/v1/usage` payload** with a stubbed
+   `document`, `fetch`, `Chart`, `Blob` and `URL`. Confirmed the gauge and tables populate, and all
+   three pending panels show their note. Then injected the missing fields and confirmed the day
+   chart, recent-requests table and download link all render — i.e. the degradation works in **both**
+   directions. Also checked the soft-warning banner and the red 402 row, and that the committed
+   percentage computed correctly (8.4 + 0.3 of 10.00 → 87.0%).
+
+Honest gap: this proves the logic runs and the markup is produced. It does **not** prove it looks
+good. Still need to open it in a browser and take the screenshot for the README.
+
+---
+
+## Likely viva questions on Task B
+
+**Q: Why two dashboards?** Different audiences and different questions. Grafana is for us —
+time-series, rates, aggregated across tenants, "is the platform healthy right now". `/dashboard` is
+for one customer — their current bill, their requests, "what am I paying for". Putting per-tenant
+billing detail in Grafana would also mean a `tenant` label on everything, which is the cardinality
+problem `DESIGN.md §5` already flags.
+
+**Q: Is it safe to paste an API key into a web page?** It is the tenant's own key, it is sent only to
+our own `/v1/usage` over HTTPS, and it is never persisted — no `localStorage`, no cookie, so closing
+the tab discards it. For production the honest answer is that this should be a session behind a real
+login; API keys are a machine credential and a human-facing page is the wrong place for one. Scope
+says end-user accounts and OAuth are out (`DESIGN.md §1`), so this is the deliberate shortcut.
+
+**Q: Why not server-render it?** Client-side `fetch` means the page reuses the *same* public
+`/v1/usage` contract a customer's own integration would call, so the dashboard cannot accidentally
+show numbers the API would not. It also keeps the route a static string with no DB access.
