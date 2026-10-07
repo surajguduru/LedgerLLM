@@ -8,9 +8,18 @@ over between tests and absolute values are meaningless here. Every test measures
 the action instead.
 """
 
+import json
+import re
+from pathlib import Path
+
 from prometheus_client import REGISTRY
 
 from tests.conftest import SAMPLE_TEXT, make_tenant, summarize
+
+DASHBOARD = Path(__file__).resolve().parent.parent / "ops/grafana/dashboards/ledgerllm.json"
+
+# Metrics the dashboard is ready for but another owner still has to emit. Remove as they land.
+PENDING_METRICS = {"ledgerllm_cache_total"}  # Suraj, with the response cache
 
 
 def value(name: str, **labels) -> float:
@@ -71,18 +80,21 @@ def test_upstream_error_counter_moves_on_provider_failure(client, api_key):
     assert value("ledgerllm_upstream_errors_total", **labels) - before == 1
 
 
-def test_scrape_exposes_every_family_the_dashboard_queries(client, api_key):
-    """The Grafana panels in ops/grafana/dashboards/ledgerllm.json query exactly these names."""
+def dashboard_metric_names() -> set[str]:
+    """Every metric name the committed Grafana dashboard queries, read out of its PromQL."""
+    dashboard = json.loads((DASHBOARD).read_text())
+    exprs = [t["expr"] for p in dashboard["panels"] for t in p.get("targets", [])]
+    return {m for e in exprs for m in re.findall(r"\b(?:ledgerllm|http)_[a-z0-9_]+", e)}
+
+
+def test_dashboard_queries_only_metrics_we_actually_expose(client, api_key):
+    """A panel whose metric was renamed shows an empty graph, not an error. This test is the alarm.
+
+    Read the panel PromQL rather than a hardcoded list, so adding a panel automatically extends the
+    check. Declared-but-unused counters still appear as `# HELP` lines, and the one request below
+    gives the histograms an observation so their `_bucket` series exist.
+    """
     summarize(client, api_key)
     text = client.get("/metrics").text
-    for family in (
-        "ledgerllm_cost_microusd_total",
-        "ledgerllm_tokens_total",
-        "ledgerllm_rejections_total",
-        "ledgerllm_llm_latency_seconds",
-        "ledgerllm_guardrail_verdicts_total",
-        "ledgerllm_feedback_total",
-        "ledgerllm_upstream_errors_total",
-        "http_request_duration_seconds",  # from the instrumentator, used for p50/p99 panels
-    ):
-        assert family in text, f"{family} missing from /metrics"
+    missing = {n for n in dashboard_metric_names() - PENDING_METRICS if n not in text}
+    assert not missing, f"dashboard panels query metrics that /metrics does not expose: {missing}"
