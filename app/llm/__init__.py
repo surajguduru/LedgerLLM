@@ -23,6 +23,13 @@ from app.llm.base import LLMProvider, LLMResult, ProviderError
 from app.llm.fallback import FallbackProvider, primary_only
 from app.llm.mock import MockProvider, estimate_tokens
 from app.llm.openai_compat import PRESETS, OpenAICompatibleProvider
+from app.llm.router import (
+    ModelRouter,
+    model_available,
+    model_provider,
+    provider_key,
+    reasoning_allowance,
+)
 
 __all__ = [
     "FallbackProvider",
@@ -33,7 +40,10 @@ __all__ = [
     "estimate_tokens",
     "fallback_model",
     "get_provider",
+    "model_available",
+    "model_provider",
     "primary_only",
+    "reasoning_allowance",
 ]
 
 
@@ -97,6 +107,19 @@ def build_provider(*, reasoning_effort: str | None = None) -> LLMProvider:
     )
 
 
+def _build_other(name: str) -> LLMProvider:
+    """A provider other than LLM_PROVIDER, for a model routed to it (its preset URL and own key)."""
+    s = get_settings()
+    return _build(
+        name,
+        api_key=provider_key(name),
+        base_url=None,
+        timeout_s=s.llm_timeout_s,
+        reasoning_effort=None,  # LLM_REASONING_EFFORT is tuned for the primary; others use their preset
+        prefix=name.upper(),
+    )
+
+
 @lru_cache
 def get_provider() -> LLMProvider:
     s = get_settings()
@@ -107,6 +130,9 @@ def get_provider() -> LLMProvider:
         timeout_s=s.llm_timeout_s,
         reasoning_effort=s.llm_reasoning_effort,
     )
+    if s.llm_provider != "mock":
+        # Each model goes to the provider that serves it (D26); LLM_PROVIDER stays the default.
+        primary = ModelRouter(primary, default_name=s.llm_provider, build=_build_other)
     model = fallback_model()
     if model is None:
         return primary

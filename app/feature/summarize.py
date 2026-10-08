@@ -40,9 +40,11 @@ def build_user_prompt(
     )
 
 
-def output_token_cap(prompt: PromptSpec, max_words: int) -> int:
-    # ~1.5 tokens/word plus headroom, capped by the prompt artifact's ceiling.
-    return min(prompt.max_tokens, int(max_words * 2) + 100)
+def output_token_cap(prompt: PromptSpec, max_words: int, *, reasoning_tokens: int = 0) -> int:
+    # ~1.5 tokens/word plus headroom, capped by the prompt artifact's ceiling. A reasoning model also
+    # spends hidden tokens first; `reasoning_tokens` (the model's prices.yaml allowance) is added on top
+    # so the visible summary still fits. The ceiling bounds the summary, not the thinking.
+    return min(prompt.max_tokens, int(max_words * 2) + 100) + max(0, reasoning_tokens)
 
 
 def run_summary(

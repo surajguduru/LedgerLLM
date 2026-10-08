@@ -171,6 +171,25 @@ reported as not found. Admins keep full control through `/admin`. Decision D24.
 
 Rolling out a new prompt = add `summarize_v2.yaml` and set `SUMMARIZE_PROMPT_VERSION`. Rolling back = set it back.
 
+### Models and providers
+
+One deployment can serve models from several providers. Each model's row in `config/prices.yaml` names
+its `provider`, and requests are routed by model name (D26). `LLM_PROVIDER` stays the default and uses
+`LLM_API_KEY`; any other provider needs its own key (`GROQ_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`,
+...). A model whose provider has no key is refused with 403 before any budget is reserved.
+
+| Model | Provider | Free tier | Plans |
+|---|---|---|---|
+| `gemini-3.8-flash`, `gemini-3.5-flash-lite` | Gemini | yes | all |
+| `gemini-3.1-flash-lite` | Gemini | yes | pro, enterprise |
+| `openai/gpt-oss-20b` | Groq | yes | all |
+| `openai/gpt-oss-120b`, `qwen/qwen3.8-27b` | Groq | yes | pro, enterprise |
+| `claude-haiku-4-5`, `claude-sonnet-5-5`, `claude-opus-5-5` | Anthropic | no | enterprise |
+
+Pick one per request with `"model"` in the body; tenants are billed at the model's list price either way.
+Reasoning models (`gpt-oss`) get extra output headroom (`reasoning_tokens` in `prices.yaml`), reserved up
+front, so their hidden reasoning cannot crowd out the summary.
+
 ## Cost attribution & budgets
 
 Every model call is one row in `usage_ledger`, priced in integer micro-USD from a versioned price table, so any

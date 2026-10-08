@@ -4,17 +4,21 @@
 # cost_microusd = input_tokens * input_usd_per_mtok + output_tokens * output_usd_per_mtok  (exact integer arithmetic)
 # A version names exactly one table: any change, a new model included, gets a new version, so every
 # price_version in the ledger resolves to the single file content (in version control) that priced it.
-version: "2026-10-08"
+# `provider` (optional) names the provider that serves the model (app/llm/router.py, D26); a model without
+# one goes to LLM_PROVIDER. `reasoning_tokens` (optional) is hidden-reasoning headroom added to the output
+# cap so a reasoning model still has room for the visible summary; the reservation covers it. Prices are
+# unchanged in 2026-10-08.2; only these two fields were added.
+version: "2026-10-08.2"
 models:
   mock:                   { input_usd_per_mtok: 0.75, output_usd_per_mtok: 3.75 }   # priced like gemini-3.8-flash so load tests book realistic $
-  gemini-3.8-flash:       { input_usd_per_mtok: 0.75, output_usd_per_mtok: 3.75 }
-  gemini-3.5-flash-lite:  { input_usd_per_mtok: 0.30, output_usd_per_mtok: 2.50 }
-  gemini-3.1-flash-lite:  { input_usd_per_mtok: 0.25, output_usd_per_mtok: 1.50 }
-  claude-haiku-4-5:       { input_usd_per_mtok: 1.00, output_usd_per_mtok: 5.00 }
-  claude-sonnet-5-5:      { input_usd_per_mtok: 2.00, output_usd_per_mtok: 10.00 }
-  claude-opus-5-5:        { input_usd_per_mtok: 4.00, output_usd_per_mtok: 20.00 }
-  llama-3.1-8b-instant:   { input_usd_per_mtok: 0.05, output_usd_per_mtok: 0.08 }   # Groq, fallback example (D19) # unverified: last known public price; on 8 Oct console.groq.com/docs/models lists it as Enterprise (contact sales) and our free key cannot call it
+  gemini-3.8-flash:       { provider: gemini, input_usd_per_mtok: 0.75, output_usd_per_mtok: 3.75 }
+  gemini-3.5-flash-lite:  { provider: gemini, input_usd_per_mtok: 0.30, output_usd_per_mtok: 2.50 }
+  gemini-3.1-flash-lite:  { provider: gemini, input_usd_per_mtok: 0.25, output_usd_per_mtok: 1.50 }
+  claude-haiku-4-5:       { provider: anthropic, input_usd_per_mtok: 1.00, output_usd_per_mtok: 5.00 }
+  claude-sonnet-5-5:      { provider: anthropic, input_usd_per_mtok: 2.00, output_usd_per_mtok: 10.00 }
+  claude-opus-5-5:        { provider: anthropic, input_usd_per_mtok: 4.00, output_usd_per_mtok: 20.00 }
+  llama-3.1-8b-instant:   { provider: groq, input_usd_per_mtok: 0.05, output_usd_per_mtok: 0.08 }   # Groq, fallback example (D19) # unverified: last known public price; on 8 Oct console.groq.com/docs/models lists it as Enterprise (contact sales) and our free key cannot call it
   # Groq models used by the summary eval (D21). Verified 8 Oct on console.groq.com/docs/models (groq.com/pricing showed no table).
-  qwen/qwen3.8-27b:       { input_usd_per_mtok: 0.80, output_usd_per_mtok: 4.00 }   # eval summarizer
-  openai/gpt-oss-120b:    { input_usd_per_mtok: 0.15, output_usd_per_mtok: 0.60 }   # eval judge
-  openai/gpt-oss-20b:     { input_usd_per_mtok: 0.075, output_usd_per_mtok: 0.30 }
+  qwen/qwen3.8-27b:       { provider: groq, input_usd_per_mtok: 0.80, output_usd_per_mtok: 4.00 }   # eval summarizer
+  openai/gpt-oss-120b:    { provider: groq, reasoning_tokens: 1024, input_usd_per_mtok: 0.15, output_usd_per_mtok: 0.60 }   # eval judge
+  openai/gpt-oss-20b:     { provider: groq, reasoning_tokens: 512, input_usd_per_mtok: 0.075, output_usd_per_mtok: 0.30 }

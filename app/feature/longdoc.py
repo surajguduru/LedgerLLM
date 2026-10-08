@@ -236,13 +236,14 @@ def plan_map_reduce(
     style: Style,
     max_words: int,
     instructions: str | None,
+    reasoning_tokens: int = 0,
 ) -> MapReducePlan:
     """Split the page and bound every call before any is made, so the pipeline can reserve the
     worst case of the whole request at once."""
     chunks = split_chunks(page.text, chunk_chars)
     n = len(chunks)
     map_words = map_word_budget(max_words, n)
-    map_cap = output_token_cap(prompt, map_words)
+    map_cap = output_token_cap(prompt, map_words, reasoning_tokens=reasoning_tokens)
     title = page.title or "untitled"
     map_prompts = [
         build_user_prompt(
@@ -264,7 +265,8 @@ def plan_map_reduce(
         prompt, page, [""] * n, style=style, max_words=max_words, instructions=instructions
     )
     reduce_in = system + estimate_tokens(frame) + n * map_cap
-    calls.append(PlannedCall("reduce", reduce_in, output_token_cap(prompt, max_words)))
+    reduce_cap = output_token_cap(prompt, max_words, reasoning_tokens=reasoning_tokens)
+    calls.append(PlannedCall("reduce", reduce_in, reduce_cap))
     return MapReducePlan(page, chunks, map_prompts, style, max_words, instructions, calls)
 
 

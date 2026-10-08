@@ -30,7 +30,13 @@ class Settings(BaseSettings):
     )
     llm_base_url: str | None = None  # only for openai_compat, or to override a preset
     default_model: str = "gemini-3.8-flash"
-    anthropic_api_key: str | None = None  # legacy alias for the anthropic provider
+    anthropic_api_key: str | None = None  # key for anthropic models when it is not LLM_PROVIDER
+    # Keys for the other providers a deployment serves models from (app/llm/router.py, D26). A model whose
+    # provider is LLM_PROVIDER uses LLM_API_KEY; a model whose provider has no key here is unavailable.
+    gemini_api_key: str | None = None
+    groq_api_key: str | None = None
+    openai_api_key: str | None = None
+    openrouter_api_key: str | None = None
     llm_timeout_s: float = 30.0
     # reasoning_effort for OpenAI-compatible providers. None: preset default (Gemini "low"); "": don't send.
     llm_reasoning_effort: str | None = None
