@@ -1,10 +1,17 @@
-"""Loads versioned prompt artifacts from prompts/*.yaml and renders the user prompt.
+r"""Loads versioned prompt artifacts from prompts/*.yaml and renders the user prompt.
 
 Rendering is one regex pass over the template: each known placeholder is
 replaced by its value, and inserted values are never scanned again. Replacing
 placeholders one after another (or using `str.format`) would let user-controlled
 text that contains a placeholder, e.g. `instructions="{text}"`, be expanded by a
 later step.
+
+The document is wrapped in <document ...> ... </document> and the system
+prompt declares everything inside it data. Untrusted values (text, title,
+source, instructions) therefore have any opening or closing document tag
+neutralised (`</document` -> `<\/document`, `<document` -> `<\document`,
+case-insensitive), so a fetched page cannot close the wrapper early and make
+the text after it look like instructions.
 """
 
 from __future__ import annotations
@@ -19,6 +26,12 @@ import yaml
 from app.config import get_settings
 
 _PLACEHOLDER = re.compile(r"\{(style|max_words|instructions_block|title|source|text)\}")
+_DOCUMENT_TAG = re.compile(r"<(/?document)", re.IGNORECASE)
+
+
+def neutralise_document_tags(value: str) -> str:
+    """Break `<document` / `</document` in untrusted text so it cannot open or close the wrapper."""
+    return _DOCUMENT_TAG.sub(r"<\\\1", value)
 
 
 @dataclass(frozen=True)
@@ -41,15 +54,17 @@ class PromptSpec:
         instructions: str | None,
     ) -> str:
         instructions_block = (
-            f"Additional focus requested by the user: {instructions}" if instructions else ""
+            f"Additional focus requested by the user: {neutralise_document_tags(instructions)}"
+            if instructions
+            else ""
         )
         values = {
             "style": self.styles.get(style, style),
             "max_words": str(max_words),
             "instructions_block": instructions_block,
-            "title": title.replace('"', "'"),
-            "source": source.replace('"', "'"),
-            "text": text,
+            "title": neutralise_document_tags(title.replace('"', "'")),
+            "source": neutralise_document_tags(source.replace('"', "'")),
+            "text": neutralise_document_tags(text),
         }
         return _PLACEHOLDER.sub(lambda m: values[m.group(1)], self.user_template)
 
