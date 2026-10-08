@@ -19,6 +19,8 @@ services:
       LLM_API_KEY: ${LLM_API_KEY:-}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token-change-me}
       GUARDRAILS_MODE: ${GUARDRAILS_MODE:-enforce}
+      SUMMARIZE_PROMPT_VERSION: ${SUMMARIZE_PROMPT_VERSION:-summarize_v1}
+      RESPONSE_CACHE_ENABLED: ${RESPONSE_CACHE_ENABLED:-true}
     ports: ["8000:8000"]
     depends_on:
       db:

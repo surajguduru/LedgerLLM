@@ -15,6 +15,10 @@ def _make_engine(url: str):
         kwargs["connect_args"] = {"check_same_thread": False}
         if url in ("sqlite://", "sqlite:///:memory:"):
             kwargs["poolclass"] = StaticPool
+    else:
+        # Neon's free tier caps connections and suspends idle computes: keep the pool small and
+        # recycle connections before the server drops them (pre_ping catches the rest).
+        kwargs.update(pool_size=5, max_overflow=5, pool_recycle=300)
     return create_engine(url, **kwargs)
 
 

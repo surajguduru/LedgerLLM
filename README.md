@@ -145,6 +145,21 @@ Errors always look like `{"error": {"code": "…", "message": "…", "request_id
 
 Rolling out a new prompt = add `summarize_v2.yaml` and set `SUMMARIZE_PROMPT_VERSION`. Rolling back = set it back.
 
+## Rate limits, idempotency, cache
+
+- **Rate limits** — fixed 60 s window per API key, one atomic `INSERT … ON CONFLICT DO UPDATE … RETURNING` per
+  request (Postgres and SQLite). Free 5, pro 60, enterprise 600 requests/minute. A check costs p50 0.75 ms / p99 1.4 ms
+  on Postgres; the accepted cost of a fixed window is up to 2× rpm across a window boundary (measured: exactly 2.0×).
+- **Idempotency** — `Idempotency-Key` is scoped per tenant and kept for 24 h. The same key with the same body replays the
+  stored response and is never billed twice; with a different body it is 409 `idempotency_conflict`; while the first
+  request is still running, a duplicate gets 409 `idempotency_in_progress`. A failed request frees the key for a retry.
+- **Response cache** — exact match on tenant, model, prompt hash, options and the extracted text, checked before the budget
+  reserve. A hit is free (`usage.cached: true`, `cost_usd: 0`) and is booked as a zero-cost ledger row so request counts
+  stay honest. TTL per plan (free 1 h, pro and enterprise 24 h); output that any guardrail flagged is never cached.
+  `Cache-Control: no-cache` skips the lookup; `RESPONSE_CACHE_ENABLED=false` turns the cache off.
+- **Model routing** — a request without `model` gets its plan's default: free → `gemini-3.5-flash-lite`, pro and
+  enterprise → `gemini-3.8-flash`.
+
 ## Evaluation and CI
 
 | Gate | Command | What it measures |
@@ -188,9 +203,10 @@ and `audit_events` tables explain every refusal after the fact.
 
 ## Deployment
 
-Docker image (`Dockerfile`) deployed as a Render web service via `render.yaml`, with a Neon Postgres database.
+Docker image (`Dockerfile`) deployed as a Render web service via `render.yaml`, with a Neon Postgres database
+(step-by-step runbook: [`docs/DEPLOY.md`](docs/DEPLOY.md)).
 Configuration is entirely environment variables: `DATABASE_URL`, `LLM_PROVIDER`, `LLM_API_KEY`,
-`ADMIN_TOKEN`, `GUARDRAILS_MODE`, `SUMMARIZE_PROMPT_VERSION`. Merges to `main` deploy automatically once CI
+`ADMIN_TOKEN`, `GUARDRAILS_MODE`, `SUMMARIZE_PROMPT_VERSION`, `RESPONSE_CACHE_ENABLED`. Merges to `main` deploy automatically once CI
 and both eval gates pass. The app is stateless, so it scales horizontally without changes.
 
 ## Repository layout
