@@ -8,7 +8,7 @@
   "timezone": "browser",
   "editable": true,
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "10s",
   "time": {
     "from": "now-15m",
@@ -17,7 +17,7 @@
   "panels": [
     {
       "type": "row",
-      "title": "Operational — is it up, and is it fast?",
+      "title": "Operational \u2014 is it up, and is it fast?",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -148,10 +148,10 @@
     {
       "type": "timeseries",
       "title": "Model latency p50 / p99 by model",
-      "description": "Time inside the provider call only. The gap between this and end-to-end latency is our platform overhead (auth, quota, guardrails, logging) — target p99 <= 25ms.",
+      "description": "Time inside the provider call only. The gap between this and end-to-end latency is our platform overhead (auth, quota, guardrails, logging) \u2014 target p99 <= 25ms.",
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 9
       },
@@ -208,8 +208,8 @@
       "description": "Provider timeouts, 5xx and 429s. retryable=true means the client got a Retry-After. Every one of these released its budget reservation, so nothing was billed.",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 9
       },
       "datasource": {
@@ -251,8 +251,56 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Provider fallbacks (primary \u2192 secondary)",
+      "description": "A retryable failure on the primary model (429, 5xx, timeout) retried once on the fallback model (D19). The tenant is billed for the model that ANSWERED, at its list price. This sits beside the upstream-error panel on purpose: an error there means the request failed, a fallback here means it succeeded on the second model \u2014 so a rising fallback rate is the early warning the error rate will not show. Gemini's free tier returns 503 often, and its quotas are per model, which is why a second Gemini model is a real fallback.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(ledgerllm_provider_fallbacks_total[5m])) by (from_model, to_model)",
+          "legendFormat": "{{from_model}} \u2192 {{to_model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "type": "row",
-      "title": "Cost — who is spending what",
+      "title": "Cost \u2014 who is spending what",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -265,7 +313,7 @@
     {
       "type": "timeseries",
       "title": "Spend per minute by tenant (USD)",
-      "description": "Ledger cost is booked in integer micro-USD (decision D5), so this divides by 1e6 to show dollars. The tenant label is the known cardinality risk at 10x scale (DESIGN.md section 5) — the fix is to drop the label and aggregate from usage_ledger.",
+      "description": "Ledger cost is booked in integer micro-USD (decision D5), so this divides by 1e6 to show dollars. The tenant label is the known cardinality risk at 10x scale (DESIGN.md section 5) \u2014 the fix is to drop the label and aggregate from usage_ledger.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -366,7 +414,7 @@
     {
       "type": "stat",
       "title": "Response cache hit rate",
-      "description": "A cache hit is served free and skips the budget reserve entirely (pipeline stage 4.5). Hits over hits+misses only: the metric also emits result=bypass when the cache was never consulted, and counting those in the denominator would understate the hit rate. Reads ledgerllm_cache_total, which arrives with Suraj's cache — shows No data until that merges.",
+      "description": "A cache hit is served free and skips the budget reserve entirely (pipeline stage 4.5). Hits over hits+misses only: the metric also emits result=bypass when the cache was never consulted, and counting those in the denominator would understate the hit rate. Reads ledgerllm_cache_total, which arrives with Suraj's cache \u2014 shows No data until that merges.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -471,7 +519,7 @@
     },
     {
       "type": "row",
-      "title": "Input — what is arriving, and what we refuse",
+      "title": "Input \u2014 what is arriving, and what we refuse",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -484,10 +532,10 @@
     {
       "type": "bargauge",
       "title": "Rejections in the last hour by reason",
-      "description": "Every refusal that happened before the model call, so none of these cost money. During the burst load test budget_exceeded dominates — that is the quota holding.",
+      "description": "Every refusal that happened before the model call, so none of these cost money. During the burst load test budget_exceeded dominates \u2014 that is the quota holding.",
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 35
       },
@@ -533,11 +581,11 @@
     {
       "type": "timeseries",
       "title": "Guardrail verdicts by stage and category",
-      "description": "stage=input screens the user's instructions and the fetched document separately; stage=output moderates the summary. In shadow mode blocked=true still appears here but the request is served — that is how we measure false positives before enforcing (decision D9).",
+      "description": "stage=input screens the user's instructions and the fetched document separately; stage=output moderates the summary. In shadow mode blocked=true still appears here but the request is served \u2014 that is how we measure false positives before enforcing (decision D9).",
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 35
       },
       "datasource": {
@@ -579,8 +627,56 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Portal sign-ins by result",
+      "description": "The /app portal has public self sign-up (D24), so this is the brute-force signal. result=invalid is a wrong password; result=throttled is our own per-e-mail and per-IP limiter refusing; result=signup is a new tenant. Many invalid with few ok is credential stuffing. This belongs in the Input row because a sign-in attempt is arriving traffic and a throttle is a refusal, same as a 429 on the API.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 35
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(ledgerllm_portal_logins_total[5m])) by (result)",
+          "legendFormat": "{{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "type": "row",
-      "title": "Quality — are the summaries any good?",
+      "title": "Quality \u2014 are the summaries any good?",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -750,7 +846,7 @@
     },
     {
       "type": "row",
-      "title": "Drift — is today different from last week?",
+      "title": "Drift \u2014 is today different from last week?",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -763,7 +859,7 @@
     {
       "type": "timeseries",
       "title": "Completion cost per successful request (USD)",
-      "description": "Completion spend divided by 200 responses, 1h window. A step up with flat traffic means longer documents, a pricier model or the fallback answering — compare with 'Spend per minute by purpose'. Alert: CostPerRequestDrift.",
+      "description": "Completion spend divided by 200 responses, 1h window. A step up with flat traffic means longer documents, a pricier model or the fallback answering \u2014 compare with 'Spend per minute by purpose'. Alert: CostPerRequestDrift.",
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -853,7 +949,7 @@
     {
       "type": "timeseries",
       "title": "Guardrail block rate",
-      "description": "Share of guardrail verdicts that blocked, per stage, 1h window. A jump after a rule change is a false-positive regression until shown otherwise — read python -m evals.redteam.shadow_report. Alert: GuardrailBlockRateDrift.",
+      "description": "Share of guardrail verdicts that blocked, per stage, 1h window. A jump after a rule change is a false-positive regression until shown otherwise \u2014 read python -m evals.redteam.shadow_report. Alert: GuardrailBlockRateDrift.",
       "gridPos": {
         "h": 8,
         "w": 8,
