@@ -8,6 +8,11 @@ key on (tenant_id, idempotency_key) makes the claim atomic, so of two identical 
 instant exactly one runs and the other gets 409 `idempotency_in_progress`. On success `store` overwrites the
 pending record with the response; on any failure `release` deletes it so the client can retry. Only 200
 responses are stored. A pending record left behind by a crashed process stops blocking after PENDING_TTL.
+
+Ownership: a pending record carries the claiming request's id (in `response_json`, which a pending record
+does not otherwise use). `release` and `store` only touch the record while it still belongs to that
+request, so a request that outlived PENDING_TTL cannot delete or overwrite the claim of the retry that
+took the key over after it.
 """
 
 from __future__ import annotations
@@ -24,7 +29,12 @@ from sqlalchemy.orm import Session
 from app.models import IdempotencyRecord, utcnow
 
 TTL = timedelta(hours=24)
-PENDING_TTL = timedelta(minutes=2)  # longer than fetch timeout + LLM timeout
+# Must outlive the slowest request: a map-reduce summary on the enterprise plan makes up to ~20 model
+# calls, each up to LLM_TIMEOUT_S (30 s) plus one fallback. Two minutes let a retry take over a key whose
+# first request was still running and bill the work twice.
+PENDING_TTL = timedelta(minutes=15)
+_OWNER_PREFIX = "pending:"
+
 PENDING_STATUS = 0
 CLEANUP_PROBABILITY = 0.01
 
@@ -56,7 +66,13 @@ def lookup(db: Session, tenant_id: str, key: str) -> IdempotencyRecord | None:
     return record
 
 
-def claim(db: Session, *, tenant_id: str, key: str, request_hash: str) -> bool:
+def _owner_marker(owner: str | None) -> str:
+    return f"{_OWNER_PREFIX}{owner}" if owner else ""
+
+
+def claim(
+    db: Session, *, tenant_id: str, key: str, request_hash: str, owner: str | None = None
+) -> bool:
     """Insert the pending record. False means another request holds the key right now."""
     if random.random() < CLEANUP_PROBABILITY:
         cleanup(db)
@@ -66,7 +82,7 @@ def claim(db: Session, *, tenant_id: str, key: str, request_hash: str) -> bool:
             idempotency_key=key,
             request_hash=request_hash,
             status_code=PENDING_STATUS,
-            response_json="",
+            response_json=_owner_marker(owner),
             created_at=utcnow(),
         )
     )
@@ -78,15 +94,20 @@ def claim(db: Session, *, tenant_id: str, key: str, request_hash: str) -> bool:
     return True
 
 
-def release(db: Session, tenant_id: str, key: str) -> None:
-    """Drop our pending record after a failed request so a retry can run."""
-    db.execute(
-        delete(IdempotencyRecord).where(
-            IdempotencyRecord.tenant_id == tenant_id,
-            IdempotencyRecord.idempotency_key == key,
-            IdempotencyRecord.status_code == PENDING_STATUS,
-        )
+def release(db: Session, tenant_id: str, key: str, owner: str | None = None) -> None:
+    """Drop our pending record after a failed request so a retry can run.
+
+    With `owner`, only a pending record claimed by that request is deleted: if our claim expired and
+    a retry took the key over, the retry's claim is left alone.
+    """
+    stmt = delete(IdempotencyRecord).where(
+        IdempotencyRecord.tenant_id == tenant_id,
+        IdempotencyRecord.idempotency_key == key,
+        IdempotencyRecord.status_code == PENDING_STATUS,
     )
+    if owner:
+        stmt = stmt.where(IdempotencyRecord.response_json == _owner_marker(owner))
+    db.execute(stmt)
     db.commit()
 
 
@@ -117,7 +138,18 @@ def store(
     request_hash: str,
     status_code: int,
     response_json: str,
-) -> None:
+    owner: str | None = None,
+) -> bool:
+    """Replace our pending record with the response. Returns False, storing nothing, when `owner` is
+    given and the key now belongs to another request (our claim expired and was taken over)."""
+    if owner:
+        current = db.get(IdempotencyRecord, (tenant_id, key))
+        if (
+            current is not None
+            and is_pending(current)
+            and current.response_json != _owner_marker(owner)
+        ):
+            return False
     db.merge(
         IdempotencyRecord(
             tenant_id=tenant_id,
@@ -128,3 +160,4 @@ def store(
             created_at=utcnow(),
         )
     )
+    return True

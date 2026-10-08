@@ -39,19 +39,31 @@ def test_remaining_decrements(client, monkeypatch):
     assert int(r2.headers["X-RateLimit-Remaining"]) == 3
 
 
-def test_limit_is_per_key(client, monkeypatch):
+def test_limit_is_per_tenant_across_keys(client, monkeypatch):
+    # The plan's rpm belongs to the tenant: a second key does not double it (review item 15).
     _freeze(monkeypatch, 1_800_000_000)
     created = make_tenant(client, plan="free")
     k1 = created["api_key"]
     r = client.post(f"/admin/tenants/{created['tenant']['id']}/keys", json={}, headers=ADMIN)
     assert r.status_code == 201, r.text
     k2 = r.json()["api_key"]
+    for i in range(5):
+        assert summarize(client, k1 if i % 2 else k2).status_code == 200
+    r1, r2 = summarize(client, k1), summarize(client, k2)
+    assert (r1.status_code, r2.status_code) == (429, 429)
+    assert r2.headers["X-RateLimit-Remaining"] == "0" and "Retry-After" in r2.headers
+    # another tenant on the same plan keeps its own allowance
+    other = make_tenant(client, plan="free", name="other")["api_key"]
+    r3 = summarize(client, other)
+    assert r3.status_code == 200 and r3.headers["X-RateLimit-Remaining"] == "4"
+
+
+def test_single_key_still_limited_per_minute(client, monkeypatch):
+    _freeze(monkeypatch, 1_800_000_000)
+    key = make_tenant(client, plan="free")["api_key"]
     for _ in range(5):
-        assert summarize(client, k1).status_code == 200
-    assert summarize(client, k1).status_code == 429
-    r2 = summarize(client, k2)
-    assert r2.status_code == 200
-    assert r2.headers["X-RateLimit-Remaining"] == "4"
+        assert summarize(client, key).status_code == 200
+    assert summarize(client, key).status_code == 429
 
 
 def test_window_reset_admits_again(client, monkeypatch):

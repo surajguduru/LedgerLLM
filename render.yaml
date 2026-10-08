@@ -5,7 +5,9 @@ services:
     runtime: docker
     plan: free
     healthCheckPath: /healthz
-    autoDeploy: true
+    # Deploy a commit on main only after its GitHub checks pass (lint, tests on SQLite and Postgres, both
+    # eval gates) — what the README promises. `commit` would deploy on push, before CI has an answer.
+    autoDeployTrigger: checksPass
     envVars:
       - key: APP_ENV
         value: prod

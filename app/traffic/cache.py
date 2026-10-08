@@ -45,9 +45,21 @@ def cache_key(
     max_words: int,
     instructions: str | None,
     text: str,
+    guardrail_version: str = "",
 ) -> str:
+    """`guardrail_version` (rules hash + mode) is part of the key: a hit skips the guardrails, so an
+    entry cached before a rule change or under GUARDRAILS_MODE=off must not be served afterwards."""
     raw = "\x1f".join(
-        [tenant_id, model, prompt_hash, style, str(max_words), instructions or "", text]
+        [
+            tenant_id,
+            model,
+            prompt_hash,
+            style,
+            str(max_words),
+            instructions or "",
+            text,
+            guardrail_version,
+        ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

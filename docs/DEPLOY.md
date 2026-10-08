@@ -27,7 +27,7 @@ Everything is configured through environment variables; nothing is baked into th
 
 | Change | How it ships | How it rolls back |
 |---|---|---|
-| Code | PR → CI (lint, tests on SQLite and Postgres, red-team gate, summarization gate) → merge to `main` → Render auto-deploys | Render → Deploys → *Redeploy* the previous build |
+| Code | PR → CI (lint, tests on SQLite and Postgres, red-team gate, summarization gate) → merge to `main` → Render deploys once that commit's checks pass (`autoDeployTrigger: checksPass`) | Render → Deploys → *Redeploy* the previous build |
 | Prompt | add `prompts/summarize_vN.yaml`, merge, then set `SUMMARIZE_PROMPT_VERSION=summarize_vN` | set the variable back (Render restarts the service; no build) |
 | Guardrail layer | deploy with `GUARDRAILS_MODE=shadow`, read the shadow report, then `enforce` | set `shadow` or `off` |
 | Response cache | on by default; TTL per plan in `config/plans.yaml` | `RESPONSE_CACHE_ENABLED=false` |

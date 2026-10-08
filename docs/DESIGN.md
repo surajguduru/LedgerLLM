@@ -20,7 +20,7 @@ is a dependency; the system around it — metering, quotas, safety, audit — is
 | # | Requirement |
 |---|---|
 | F1 | API-key authentication; keys belong to tenants; tenants have a plan (free / pro / enterprise) |
-| F2 | Tiered rate limits per key (requests per minute by plan) with `X-RateLimit-*` and `Retry-After` headers |
+| F2 | Tiered rate limits per tenant and per key (requests per minute by plan; a tenant's keys share it) with `X-RateLimit-*` and `Retry-After` headers |
 | F3 | Monthly cost budget per tenant: hard cutoff (HTTP 402) and soft warning (header + audit event at 80 %) |
 | F4 | Cost attribution: every model call (completion and guardrail classifier) booked as a ledger row with tokens, model, price version, prompt version |
 | F5 | Per-tenant usage endpoint and billing dashboard |
@@ -68,7 +68,7 @@ multi-region deployment. Stretch: PDF ingestion, semantic cache, Langfuse tracin
 ```
 client ─▶ ① auth: X-API-Key → tenant, plan                               401 / 403
           ② idempotency replay (tenant, Idempotency-Key)                  200 replay / 409
-          ③ rate limit: per key, fixed 60 s window, plan.rpm              429 + Retry-After
+          ③ rate limit: per key+tenant, 60 s window, plan.rpm            429 + Retry-After
           ④ acquire content: fetch URL (SSRF guard) → extract → fit (D20)  422 / 400
           ④½ exact-match response cache (per tenant) — a hit returns here  200, cost 0
           ⑤ estimate worst-case cost → ATOMIC RESERVE on budget_periods    402
@@ -155,7 +155,7 @@ Local: docker compose = app + postgres + prometheus + grafana
 
 **Deployment and rollout.** Stateless FastAPI container on Render with managed Postgres on Neon. A pull request must
 pass lint, the test suite on SQLite and Postgres, the red-team gate and (when prompts or feature code change) the
-summarization gate; merging to `main` auto-deploys. A new prompt ships as a new YAML file and goes live by setting
+summarization gate; merging to `main` deploys once the merge commit's checks pass (`autoDeployTrigger: checksPass` in `render.yaml`; branch protection on `main` with these checks required is the repo-settings half). A new prompt ships as a new YAML file and goes live by setting
 `SUMMARIZE_PROMPT_VERSION`; rollback is setting it back. A new guardrail layer ships in `GUARDRAILS_MODE=shadow`
 first, then `enforce`. Code rollback is Render's redeploy-previous. Schema changes are additive only.
 

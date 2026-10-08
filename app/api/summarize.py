@@ -27,6 +27,7 @@ from app.billing import budget, ledger
 from app.billing.pricing import compute_cost_microusd, estimate_cost_microusd, load_prices
 from app.compliance import audit as audit_events
 from app.compliance.audit import audit
+from app.compliance.redaction import redact
 from app.compliance.request_log import write_request_log
 from app.config import Settings, get_settings
 from app.db import get_db
@@ -42,6 +43,7 @@ from app.feature.longdoc import (
 )
 from app.feature.prompts import load_prompt
 from app.feature.summarize import build_user_prompt, output_token_cap, run_summary
+from app.guardrails import rules_version
 from app.guardrails.input import classify_input
 from app.guardrails.output import moderate_output
 from app.guardrails.types import PASS, GuardrailVerdict
@@ -131,6 +133,21 @@ def _run_guardrail(
         )
         return False
     return True
+
+
+def _persistable(body: SummarizeResponse) -> str:
+    """The JSON stored for idempotent replay, with the summary and page title redacted.
+
+    In enforce mode the summary is already redacted by output moderation; in shadow and off modes it is
+    not, and neither is the page title in any mode. What is persisted follows the request log's rule:
+    never raw PII. A replay therefore returns the redacted copy.
+    """
+    source = body.source.model_copy(
+        update={"title": redact(body.source.title or "").text or body.source.title}
+    )
+    return body.model_copy(
+        update={"summary": redact(body.summary).text, "source": source}
+    ).model_dump_json()
 
 
 def _release_open_reservation(db: Session) -> None:
@@ -245,7 +262,11 @@ def summarize(
             headers={"Idempotent-Replayed": "true", "X-Request-ID": request_id},
         )
     if existing is not None or not idempotency.claim(
-        db, tenant_id=auth.tenant.id, key=idempotency_key, request_hash=request_hash
+        db,
+        tenant_id=auth.tenant.id,
+        key=idempotency_key,
+        request_hash=request_hash,
+        owner=request_id,
     ):
         raise _fail(
             db,
@@ -274,7 +295,7 @@ def summarize(
     except BaseException:
         db.rollback()
         _release_open_reservation(db)
-        idempotency.release(db, auth.tenant.id, idempotency_key)
+        idempotency.release(db, auth.tenant.id, idempotency_key, owner=request_id)
         raise
 
 
@@ -296,7 +317,7 @@ def _pipeline(
     raw_for_log = payload.text or str(payload.url)
 
     # 3. rate limit ----------------------------------------------------------------------------
-    rl = check_rate_limit(db, key.id, plan)
+    rl = check_rate_limit(db, key.id, plan, tenant_id=tenant.id)
     response.headers.update(rl.headers())
     if not rl.allowed:
         raise _fail(
@@ -382,6 +403,7 @@ def _pipeline(
         max_words=payload.max_words,
         instructions=payload.instructions,
         text=page.text,
+        guardrail_version=f"{rules_version()}:{settings.guardrails_mode}",
     )
     use_cache = settings.response_cache_enabled and plan.cache_ttl_s > 0
     cached = None
@@ -467,7 +489,8 @@ def _pipeline(
                 key=idempotency_key,
                 request_hash=request_hash,
                 status_code=200,
-                response_json=body.model_dump_json(),
+                response_json=_persistable(body),
+                owner=request_id,
             )
         db.commit()
         return body
@@ -755,7 +778,6 @@ def _pipeline(
             mode=mode, input=verdict_in.to_dict(), output=verdict_out.to_dict()
         ),
     )
-    body_json = body.model_dump_json()
     write_request_log(
         db,
         request_id=request_id,
@@ -779,7 +801,7 @@ def _pipeline(
             tenant.id,
             ckey,
             cache.CachedSummary(
-                text=result.text,
+                text=redact(result.text).text,  # never raw PII at rest, whatever the guardrail mode
                 model=answered,
                 prompt_version=prompt_version,
                 input_tokens=result.input_tokens,
@@ -794,7 +816,8 @@ def _pipeline(
             key=idempotency_key,
             request_hash=request_hash,
             status_code=200,
-            response_json=body_json,
+            response_json=_persistable(body),
+            owner=request_id,
         )
     db.commit()
     db.info.pop("open_reservation", None)  # settled and committed: nothing left to release
