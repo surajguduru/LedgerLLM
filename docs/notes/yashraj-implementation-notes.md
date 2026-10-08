@@ -553,3 +553,127 @@ concurrency without weakening the limiter.
 **Q: Why is cache hit rate low in the burst numbers?** Because the burst deliberately defeats the
 cache with unique documents — it has to, or the budget is never exercised. Hit rate should be read
 from steady traffic. Worth stating when showing the dashboard so the panel is not misread.
+
+---
+
+## 8 Oct (evening) — the Postgres proof, alerts, and the stack verified end to end
+
+Docker came up, so the two blocked items are done. Tasks A and C are now complete except for the
+screenshots, which need a browser.
+
+### The headline result, done properly
+**Postgres 16, 50 users on 50 keys of one tenant, 60 s, `MOCK_LATENCY_MS=800`** (the latency the
+brief specifies, which I had been running at 120):
+
+```
+~13,000 requests at 218 req/s  ->  200: 157,  402: 8,650,  429: 4,195
+spent $0.018765 of $0.020000,  reserved back to $0,  402 refusals 8,650
+quota enforcement: HOLDS           measured overspend: $0.000000
+```
+
+**This supersedes the SQLite run**, which held for the wrong reason. SQLite takes a database-wide
+write lock, so concurrent requests queue instead of racing — the serialisation hid the race rather
+than the atomic reserve winning it. Postgres runs the admission `UPDATE … WHERE spent + reserved +
+est <= limit` under real row-level concurrency, and 50 keys on one tenant means 50 clients genuinely
+racing one budget.
+
+**Why 800 ms is the number to quote.** It is the hostile case, not merely a slow one. The naive
+alternative — check `spent < limit`, *then* call the model — leaves a window as wide as the model
+call in which every concurrent request reads the same stale `spent` and all of them pass. At 800 ms
+with 50 in flight, ~50 requests get admitted where ~1 fits: about **$0.035 of overspend against a
+$0.020 limit, ~2.7× the entire budget in one wave**, repeating every wave until a settle lands. The
+atomic reserve closes the window because admission and accounting are the *same* statement.
+
+### The side result I did not expect to be this clean
+| | SQLite | Postgres 16 |
+|---|---|---|
+| Throughput | 228 req/s | 218 req/s |
+| **p99** | **670 ms** | **140 ms** |
+
+**4.8× better at p99 on identical code.** That gap is the proof that the SQLite p99 was its write
+lock and not our platform overhead — and it turns `DESIGN.md` §5 limit #1 (four writes per request)
+from a prediction into a measurement. Good slide-10 material: the "what breaks at 10×" claim is not
+theoretical, I changed one variable and watched the predicted bottleneck appear and disappear.
+
+### Prometheus alert rules (`ops/alerts.yml`) — the good-to-have, done
+Three rules, each phrased against a target in `DESIGN.md` §1 rather than a round number:
+
+| Alert | Expression shape | `for:` |
+|---|---|---|
+| `BudgetRefusalSpike` | sustained 402 **rate** > 1/s | 10m |
+| `EndToEndLatencyP99AboveTarget` | `histogram_quantile(0.99, …) > 8` | 10m |
+| `UpstreamErrorRateHigh` | upstream errors / total requests > 5% | 5m |
+
+Three deliberate choices worth defending:
+- **The upstream alert is a ratio, not a count.** 5 errors/s is an incident at 20 req/s and noise at
+  2,000 req/s. `clamp_min` on the denominator stops it dividing by zero when there is no traffic.
+- **Every rule has a `for:` window.** One slow request or one provider blip is not an incident; the
+  window is what separates a signal from a twitch.
+- **402s alert on a sustained rate, never on a single event.** A tenant hitting their cap is the
+  system working as designed — the alert fires only when it stays high, which means a client stuck
+  retrying a 402 or a misconfigured budget.
+
+Each annotation also says what the alert does *not* cover, and names the dashboard row to open.
+
+### Verified the whole stack, not just the files
+`make up` → app + Postgres + Prometheus + Grafana. Then, rather than assume:
+
+1. **Prometheus is scraping** — target `ledgerllm` health `up`.
+2. **Alert rules loaded** — all three `health=ok`, `state=inactive`. (First attempt showed *no* rules:
+   the container was still running from an earlier `make up` that predated the mount, so I had to
+   `--force-recreate` it. Worth remembering — a provisioning change needs a container recreate, not
+   a restart.)
+3. **Grafana provisioned the dashboard** — `uid=ledgerllm`, 16 panels, in the LedgerLLM folder.
+   (The second "LedgerLLM" in the search API is the *folder*, type `dash-folder`, not a duplicate.)
+4. **Every panel returns live data** — I generated mixed traffic (successes on two tenants, cache
+   hits, `[[MOCK_FAIL]]` upstream errors, a 403, guardrail blocks, 429 floods, feedback) and executed
+   **all 14 panel queries against the live Prometheus API**. Result: *0 panels without data.*
+
+The single most convincing check: the **thumbs-up share panel read 50.09%**, and my traffic generator
+alternates up/down. That is the entire chain verified end to end — feedback endpoint → ledger lookup
+→ `prompt_version` label → Prometheus scrape → panel arithmetic.
+
+A lesson on reading an idle dashboard: on the first pass every panel showed `0` and the two histogram
+panels showed `NaN`. Neither was a bug — `rate()` over a window with no traffic is legitimately 0,
+and `histogram_quantile` of all-zero rates is `NaN`. I only trusted the panels once traffic was
+running *concurrently* with the query. Worth knowing before the demo: **open the dashboard with
+traffic flowing, or it looks broken.**
+
+### Cardinality, measured properly instead of guessed
+I had recorded "85 series". On the live stack it is **171 series** — but the useful number is finer:
+
+- only **18** series carry a `tenant` label, across 3 tenants → **6 series per tenant**
+  (tokens: tenant × model × 2 directions × purposes; cost: tenant × model × purposes)
+- extrapolated: 1,000 tenants × 3 models ≈ **27,000 series** from this app alone → exactly why
+  `DESIGN.md` §5 limit #4 says drop the `tenant` label and aggregate from `usage_ledger`
+- the 85 `http_*` series are mostly **my own** doing: widening the latency histogram from 3 buckets
+  to 14 costs ~11 extra series per handler/method pair
+
+That last point is the honest version of my own design decision: **cardinality is the price of
+resolution.** I bought the ability to measure a 25 ms target and an 8 s target, and I paid ~11 series
+per endpoint for it. Being able to state both halves is better than quoting only the benefit.
+
+---
+
+## Likely viva questions on the Postgres run
+
+**Q: Why does the SQLite run appear in your write-up at all, if Postgres is the real proof?**
+Because the contrast *is* a result. Same code, p99 670 ms vs 140 ms — that is how I know the SQLite
+number was the datastore and not our code, and it is a live demonstration of the first scaling limit
+the design document predicts.
+
+**Q: Your aggregate p50 is 55 ms but the model takes 800 ms. How?**
+Because 8,650 of ~13,000 requests were refused with 402 before the model was ever called — that is
+pipeline ordering D6 working, and it is why the aggregate percentiles are dominated by the cheap
+refusal path. The `steady` class, which does reach the model, shows p99 2,800 ms.
+
+**Q: How do you know the alert rules work and not just that the YAML parses?**
+Prometheus reports them `health=ok` and `state=inactive` with a recent `lastEvaluation` — it is
+evaluating the expressions, not just holding the file. I have not forced one to fire; that would be
+the next step and I would do it by dropping a threshold rather than by generating a real incident.
+
+**Q: Was anything actually wrong with the dashboard?**
+Two things, both found by checking rather than assuming. The cache hit-rate denominator counted
+`result=bypass` and would have understated the rate — found by reading Suraj's code, not the metric
+name. And the Prometheus container silently had no rules because it predated the volume mount — a
+provisioning change needs a recreate, not a restart.
