@@ -144,3 +144,25 @@ groups:
             python -m evals.redteam.shadow_report. Without a change, check whether one tenant
             dominates (an attack, or a document set that trips a rule).
           runbook: "Dashboard row 'Drift', panel 'Guardrail block rate'"
+
+      # --- Abuse: the portal is a public sign-up form -------------------------------------------
+      - alert: PortalFailedSignInSpike
+        # Added with the tenant portal (D24), which put a public e-mail+password form on the
+        # internet. A ratio, not a count: a few typos are normal at any traffic level, but failures
+        # dominating sign-in attempts is credential stuffing. clamp_min keeps the expression defined
+        # when nobody is signing in at all.
+        expr: >-
+          sum(rate(ledgerllm_portal_logins_total{result=~"invalid|throttled"}[10m]))
+          / clamp_min(sum(rate(ledgerllm_portal_logins_total[10m])), 0.001)
+          > 0.5
+        for: 15m
+        labels: { severity: warning, category: abuse }
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of portal sign-ins failing (threshold 50%)"
+          description: >-
+            Most sign-in attempts have failed for 15 minutes. Check the split: mostly `throttled`
+            means our limiter is already absorbing it and the real risk is a locked-out customer;
+            mostly `invalid` means the limiter is not binding and the per-IP window may be too wide.
+            The audit events carry the e-mail and IP. This does NOT cover a slow attack spread under
+            the threshold, nor one that succeeds — a successful sign-in looks like result=ok.
+          runbook: "Dashboard row 'Input', panel 'Portal sign-ins by result'"
