@@ -20,6 +20,8 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.observability.logging import note_error
+
 log = structlog.get_logger()
 
 
@@ -49,6 +51,7 @@ def _body(request: Request, code: str, message: str) -> dict:
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error(request: Request, exc: ApiError) -> JSONResponse:
+        note_error(request, exc.code)
         headers = dict(exc.headers)
         rid = _request_id(request)
         if rid:
@@ -65,10 +68,12 @@ def install_error_handlers(app: FastAPI) -> None:
         loc = ".".join(str(p) for p in first.get("loc", []) if p != "body")
         msg = first.get("msg", "invalid request")
         message = f"{loc}: {msg}" if loc else msg
+        note_error(request, "validation_error")
         return JSONResponse(status_code=422, content=_body(request, "validation_error", message))
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+        note_error(request, "internal_error")
         log.exception("unhandled_error", error=str(exc))
         return JSONResponse(
             status_code=500,

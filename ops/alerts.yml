@@ -1,0 +1,67 @@
+# Prometheus alert rules. OWNER: Yashraj.
+#
+# Loaded by ops/prometheus.yml. These are the three things that would make me open the dashboard at
+# night, phrased against the targets in docs/DESIGN.md section 1 rather than round numbers.
+#
+# `for:` is what keeps these from firing on noise: a single slow request or one upstream blip is not
+# an incident. Each threshold also has a deliberate "don't page me for this" twin recorded in the
+# annotations, so whoever gets the alert knows what is NOT covered.
+groups:
+  - name: ledgerllm
+    interval: 30s
+    rules:
+      # --- Cost / quota -------------------------------------------------------------------------
+      - alert: BudgetRefusalSpike
+        # 402s are a normal, designed outcome -- one tenant hitting its cap is not an incident. A
+        # sustained rate across the fleet means either a tenant is stuck in a retry loop (they need
+        # a bigger plan, or a bug is retrying a non-retryable error) or budgets are misconfigured.
+        expr: sum(rate(ledgerllm_rejections_total{reason="budget_exceeded"}[5m])) > 1
+        for: 10m
+        labels: { severity: warning, category: cost }
+        annotations:
+          summary: "Sustained budget refusals ({{ $value | printf \"%.1f\" }}/s for 10m)"
+          description: >-
+            Tenants are being refused with 402 at over 1/s for ten minutes. Check
+            GET /admin/audit for budget.exceeded events and which tenant dominates; a client
+            retrying a 402 in a tight loop is the usual cause. Nothing is being overspent -- the
+            cutoff is working -- but someone is getting no service.
+          runbook: "Dashboard row 'Cost', panel 'Spend per minute by tenant'"
+
+      # --- Operational: latency ----------------------------------------------------------------
+      - alert: EndToEndLatencyP99AboveTarget
+        # Target from DESIGN.md section 1: p99 <= 8 s on a ~3k-token document. 8 is a bucket edge in
+        # HTTP_LATENCY_BUCKETS precisely so this comparison is read off a counter, not interpolated.
+        expr: >-
+          histogram_quantile(
+            0.99,
+            sum(rate(http_request_duration_seconds_bucket{handler="/v1/summarize"}[5m])) by (le)
+          ) > 8
+        for: 10m
+        labels: { severity: warning, category: operational }
+        annotations:
+          summary: "p99 latency {{ $value | printf \"%.1f\" }}s, target is 8s"
+          description: >-
+            Compare with the 'Model latency by model' panel first. If model latency moved, it is the
+            provider and the fallback provider is the lever. If it did not, the time is ours --
+            platform overhead should be ~10 ms, so a jump means database contention (see DESIGN.md
+            section 5: four writes per request) rather than anything in the model path.
+          runbook: "Dashboard row 'Operational'"
+
+      # --- Operational: upstream ----------------------------------------------------------------
+      - alert: UpstreamErrorRateHigh
+        # Ratio, not a count: 5 errors/s matters at 20 req/s and is noise at 2,000 req/s.
+        # clamp_min keeps the expression from dividing by zero when there is no traffic at all.
+        expr: >-
+          sum(rate(ledgerllm_upstream_errors_total[5m]))
+          / clamp_min(sum(rate(http_requests_total{handler="/v1/summarize"}[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels: { severity: critical, category: operational }
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of requests failing upstream (threshold 5%)"
+          description: >-
+            The provider is refusing or timing out. Every one of these released its budget
+            reservation, so no tenant was charged -- check 'reserved' on the tenant dashboard is
+            still returning to zero. Split by the retryable label: all-retryable usually means
+            provider rate limiting, so check the free-tier quota before blaming the code.
+          runbook: "Dashboard row 'Operational', panel 'Upstream provider errors by retryability'"

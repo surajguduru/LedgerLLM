@@ -1,4 +1,15 @@
-"""JSON structured logging (structlog) + a middleware that assigns a request id to every request."""
+"""JSON structured logging (structlog) + a middleware that assigns a request id to every request.
+
+The `http_request` line carries `tenant_id` and `error_code` so a refusal can be traced to a customer
+from the logs alone, without joining the ledger. Other packages attach them with `note_tenant()` and
+`note_error()`.
+
+Why those write to `request.state` and not to structlog contextvars: `BaseHTTPMiddleware` runs the
+downstream app in its own anyio task, so a contextvar bound inside a route or an exception handler is
+NOT visible here after `call_next`. `request.state` is backed by the ASGI `scope` dict, which *is*
+shared between the middleware's Request and the route's, so values set downstream survive the trip
+back up.
+"""
 
 from __future__ import annotations
 
@@ -37,6 +48,16 @@ def configure_logging(settings: Settings) -> None:
     )
 
 
+def note_tenant(request: Request, tenant_id: str) -> None:
+    """Record which tenant this request belongs to, for the `http_request` log line."""
+    request.state.tenant_id = tenant_id
+
+
+def note_error(request: Request, code: str) -> None:
+    """Record the stable error code this request was refused with, for the `http_request` log line."""
+    request.state.error_code = code
+
+
 class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or uuid4().hex
@@ -51,5 +72,11 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         latency_ms = int((perf_counter() - t0) * 1000)
         response.headers["X-Request-ID"] = request_id
         if request.url.path not in ("/metrics", "/healthz"):
-            log.info("http_request", status=response.status_code, latency_ms=latency_ms)
+            log.info(
+                "http_request",
+                status=response.status_code,
+                latency_ms=latency_ms,
+                tenant_id=getattr(request.state, "tenant_id", None),
+                error_code=getattr(request.state, "error_code", None),
+            )
         return response

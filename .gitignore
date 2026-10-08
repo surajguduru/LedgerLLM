@@ -20,3 +20,5 @@ evals/**/results/*
 # team-internal planning docs live outside the repo; never commit them
 team-private/
 private/
+loadtest/burst_tenant.json
+loadtest/latency_sample.json
