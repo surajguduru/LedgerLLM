@@ -3,6 +3,7 @@
 OWNER: Suraj.
 Contract (do not change signatures without a PR comment to Suraj):
     check_rate_limit(db, key_id, plan) -> RateLimitResult
+    hit(db, bucket, limit) -> RateLimitResult   (any per-minute bucket, e.g. portal login attempts)
 
 Fixed 60 s window per key (docs/DESIGN.md D3): one atomic
 INSERT ... ON CONFLICT DO UPDATE SET count = count + 1 RETURNING count on rate_limit_windows, so two
@@ -70,15 +71,20 @@ def prune_windows(db: Session, now: int) -> int:
 
 
 def check_rate_limit(db: Session, key_id: str, plan: Plan) -> RateLimitResult:
+    return hit(db, key_id, plan.rpm)
+
+
+def hit(db: Session, bucket: str, limit: int) -> RateLimitResult:
+    """Count one event in `bucket` (<= 36 chars) for the current minute and compare with `limit`."""
     now = int(time.time())
     window_start = now - (now % WINDOW_SECONDS)
-    count = _increment(db, key_id, window_start)
+    count = _increment(db, bucket, window_start)
     if random.random() < PRUNE_PROBABILITY:
         prune_windows(db, now)
     db.commit()
     return RateLimitResult(
-        allowed=count <= plan.rpm,
-        limit=plan.rpm,
-        remaining=max(0, plan.rpm - count),
+        allowed=count <= limit,
+        limit=limit,
+        remaining=max(0, limit - count),
         reset_epoch=window_start + WINDOW_SECONDS,
     )

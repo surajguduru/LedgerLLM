@@ -8,16 +8,16 @@ from __future__ import annotations
 import secrets
 
 from fastapi import APIRouter, Depends, Header
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.keys import generate_key
+from app.auth import keys
 from app.compliance import audit as audit_events
 from app.compliance.audit import audit
 from app.config import get_settings
 from app.db import get_db
 from app.errors import ApiError
-from app.models import ApiKey, AuditEvent, Tenant, utcnow
+from app.models import ApiKey, AuditEvent, Tenant
 from app.plans import load_plans, microusd_to_usd, usd_to_microusd
 from app.quality.stats import quality_report
 from app.schemas import (
@@ -89,10 +89,6 @@ def create_tenant(
     )
     db.add(tenant)
     db.flush()
-    raw, prefix, digest = generate_key()
-    key = ApiKey(tenant_id=tenant.id, name=payload.key_name, key_prefix=prefix, key_hash=digest)
-    db.add(key)
-    db.flush()
     audit(
         db,
         audit_events.TENANT_CREATED,
@@ -100,14 +96,7 @@ def create_tenant(
         actor="admin",
         details={"plan": tenant.plan, "name": tenant.name},
     )
-    audit(
-        db,
-        audit_events.KEY_CREATED,
-        tenant_id=tenant.id,
-        key_id=key.id,
-        actor="admin",
-        details={"prefix": prefix},
-    )
+    key, raw = keys.create_key(db, tenant.id, payload.key_name, actor="admin")
     db.commit()
     return CreateTenantResponse(tenant=_tenant_out(tenant), key=_key_out(key), api_key=raw)
 
@@ -125,18 +114,7 @@ def create_key(
     tenant = db.get(Tenant, tenant_id)
     if tenant is None:
         raise ApiError(404, "tenant_not_found", "no such tenant")
-    raw, prefix, digest = generate_key()
-    key = ApiKey(tenant_id=tenant.id, name=payload.name, key_prefix=prefix, key_hash=digest)
-    db.add(key)
-    db.flush()
-    audit(
-        db,
-        audit_events.KEY_CREATED,
-        tenant_id=tenant.id,
-        key_id=key.id,
-        actor="admin",
-        details={"prefix": prefix},
-    )
+    key, raw = keys.create_key(db, tenant.id, payload.name, actor="admin")
     db.commit()
     return CreateKeyResponse(key=_key_out(key), api_key=raw)
 
@@ -170,17 +148,8 @@ def revoke_key(key_id: str, db: Session = Depends(get_db)) -> ApiKeyOut:
     key = db.get(ApiKey, key_id)
     if key is None:
         raise ApiError(404, "key_not_found", "no such key")
-    if key.revoked_at is None:
-        key.revoked_at = utcnow()
-        audit(
-            db,
-            audit_events.KEY_REVOKED,
-            tenant_id=key.tenant_id,
-            key_id=key.id,
-            actor="admin",
-            details={"prefix": key.key_prefix},
-        )
-        db.commit()
+    keys.revoke_key(db, key, actor="admin")
+    db.commit()
     return _key_out(key)
 
 
@@ -189,36 +158,7 @@ def rotate_key(key_id: str, db: Session = Depends(get_db)) -> CreateKeyResponse:
     old = db.get(ApiKey, key_id)
     if old is None:
         raise ApiError(404, "key_not_found", "no such key")
-    # Revoke-and-replace happens once: a retried, double-clicked or concurrent rotate of the same key
-    # loses the conditional UPDATE and gets 409 instead of minting a second live key.
-    won = db.execute(
-        update(ApiKey)
-        .where(ApiKey.id == key_id, ApiKey.revoked_at.is_(None))
-        .values(revoked_at=utcnow())
-    ).rowcount
-    if won != 1:
-        db.rollback()
-        raise ApiError(409, "key_revoked", "key is already revoked or rotated; rotate the live key")
-    raw, prefix, digest = generate_key()
-    new = ApiKey(tenant_id=old.tenant_id, name=old.name, key_prefix=prefix, key_hash=digest)
-    db.add(new)
-    db.flush()
-    audit(
-        db,
-        audit_events.KEY_ROTATED,
-        tenant_id=old.tenant_id,
-        key_id=new.id,
-        actor="admin",
-        details={"prefix": prefix, "rotated_from": old.id},
-    )
-    audit(
-        db,
-        audit_events.KEY_CREATED,
-        tenant_id=old.tenant_id,
-        key_id=new.id,
-        actor="admin",
-        details={"prefix": prefix},
-    )
+    new, raw = keys.rotate_key(db, old, actor="admin")
     db.commit()
     return CreateKeyResponse(key=_key_out(new), api_key=raw)
 
