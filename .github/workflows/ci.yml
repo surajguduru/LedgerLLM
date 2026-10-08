@@ -46,8 +46,9 @@ jobs:
       - run: python -m evals.redteam.run --gate
 
   # Eval gate 2: summarization golden set. Programmatic checks always run (mock provider, free).
-  # The LLM-judge run uses the real model and needs LLM_API_KEY (a Gemini key) as a repo secret; it only
-  # runs on PRs that touch prompts/ or the feature code, to stay inside the free-tier rate limits.
+  # The LLM-judge run uses real models on Groq's free tier and needs LLM_API_KEY (a Groq key) as a repo
+  # secret; it only runs on PRs that touch prompts/, the feature code or the eval, and only on the 8-case
+  # CI subset (~4 min under Groq's 8,000 tokens/min). The full 30 cases are run locally and committed.
   eval-summarization:
     runs-on: ubuntu-latest
     steps:
@@ -64,8 +65,8 @@ jobs:
           git fetch origin ${{ github.base_ref }}
           if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -Eq '^(prompts/|app/feature/|evals/summarization/)'; then
             echo "run_llm=true" >> "$GITHUB_OUTPUT"; else echo "run_llm=false" >> "$GITHUB_OUTPUT"; fi
-      - name: LLM-judge eval (real model)
+      - name: LLM-judge eval (real model, CI subset)
         if: steps.changes.outputs.run_llm == 'true'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-        run: python -m evals.summarization.run --provider gemini --gate
+        run: python -m evals.summarization.run --provider groq --subset ci --gate
