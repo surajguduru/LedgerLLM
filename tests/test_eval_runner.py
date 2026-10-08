@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.llm.base import LLMResult
+from app.feature.prompts import load_prompt
+from app.llm.base import LLMResult, ProviderError
+from app.llm.mock import MockProvider
 from evals.summarization import run
 
 TH = {
@@ -114,3 +116,99 @@ def test_judge_error_rate_above_ten_percent_fails_the_gate():
 
 def test_all_judge_errors_fail_the_gate():
     assert run.judge_gate(_rows([None, None, None]), TH) is False
+
+
+class FakeClock:
+    """Time only moves when someone sleeps (or a test calls advance)."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, s: float) -> None:
+        self.sleeps.append(s)
+        self.now += s
+
+    def advance(self, s: float) -> None:
+        self.now += s
+
+
+def test_pacer_spaces_calls_per_model_at_rpm_8():
+    clock = FakeClock()
+    pacer = run.Pacer(8, clock=clock, sleep=clock.sleep)
+    for _ in range(3):
+        pacer.wait("summarizer")
+    assert clock.sleeps == [7.5, 7.5]  # 60 s / 8
+
+
+def test_pacer_limits_each_model_separately():
+    clock = FakeClock()
+    pacer = run.Pacer(8, clock=clock, sleep=clock.sleep)
+    pacer.wait("summarizer")
+    pacer.wait("judge")  # separate quota: no wait
+    clock.advance(2.0)  # e.g. the summary call took 2 s
+    pacer.wait("summarizer")
+    assert clock.sleeps == [5.5]
+
+
+def test_pacer_with_zero_rpm_never_sleeps():
+    clock = FakeClock()
+    pacer = run.Pacer(0, clock=clock, sleep=clock.sleep)
+    for _ in range(5):
+        pacer.wait("m")
+    assert clock.sleeps == []
+
+
+def _flaky(failures: int, *, retryable: bool = True):
+    state = {"calls": 0}
+
+    def fn():
+        state["calls"] += 1
+        if state["calls"] <= failures:
+            raise ProviderError("gemini rate limited", retryable=retryable)
+        return "ok"
+
+    return fn, state
+
+
+def test_backoff_waits_15_30_60_then_succeeds():
+    clock = FakeClock()
+    fn, state = _flaky(3)
+    out = run.call_with_backoff(fn, model="m", pacer=run.Pacer(0), sleep=clock.sleep)
+    assert out == "ok" and state["calls"] == 4 and clock.sleeps == [15, 30, 60]
+
+
+def test_backoff_gives_up_after_three_waits():
+    clock = FakeClock()
+    fn, state = _flaky(10)
+    with pytest.raises(ProviderError):
+        run.call_with_backoff(fn, model="m", pacer=run.Pacer(0), sleep=clock.sleep)
+    assert state["calls"] == 4 and clock.sleeps == [15, 30, 60]
+
+
+def test_backoff_does_not_retry_permanent_errors():
+    clock = FakeClock()
+    fn, state = _flaky(1, retryable=False)
+    with pytest.raises(ProviderError):
+        run.call_with_backoff(fn, model="m", pacer=run.Pacer(0), sleep=clock.sleep)
+    assert state["calls"] == 1 and clock.sleeps == []
+
+
+def _case(text: str = "Alpha beta gamma delta. " * 20, **extra) -> dict:
+    return {"id": "c1", "title": "t", "text": text, "key_points": ["alpha beta"], **extra}
+
+
+def test_case_that_keeps_failing_is_recorded_not_raised():
+    prompt = load_prompt()
+    row = run.evaluate_case(
+        _case("[[MOCK_FAIL]] " * 5),
+        provider=MockProvider(),
+        prompt=prompt,
+        model="m",
+        use_judge=True,
+    )
+    assert row["error"].startswith("summary:")
+    assert "judge_error" in row["judge"]
