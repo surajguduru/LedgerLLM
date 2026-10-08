@@ -356,6 +356,61 @@ class RoutingProvider(MockProvider):
         return super().complete(model=model, system=system, user=user, max_tokens=max_tokens)
 
 
+@pytest.mark.parametrize(
+    ("judge_model", "expected"),
+    [
+        ("openai/gpt-oss-120b", "low"),
+        ("openai/gpt-oss-20b", "low"),
+        ("qwen/qwen3.8-27b", None),
+        ("gemini-3.5-flash-lite", None),  # None = the preset default ("low" on Gemini)
+    ],
+)
+def test_default_judge_reasoning_effort(judge_model, expected):
+    assert run.default_judge_reasoning_effort(judge_model) == expected
+
+
+def test_judge_calls_go_to_the_judge_provider():
+    summarizer = RoutingProvider('{"faithfulness": 1, "coverage": 1, "issues": []}')
+    judge_p = ScriptedProvider([GOOD])
+    row = run.evaluate_case(
+        _case(),
+        provider=summarizer,
+        prompt=load_prompt(),
+        model="sum",
+        use_judge=True,
+        judge_model="jdg",
+        judge_provider=judge_p,
+    )
+    assert summarizer.models == ["sum"]
+    assert [c["model"] for c in judge_p.calls] == ["jdg"]
+    assert row["judge"]["faithfulness"] == 5
+
+
+def test_each_call_is_paced_with_its_token_estimate():
+    seen: list[tuple[str, int]] = []
+
+    def call(model, fn, tokens=0):
+        seen.append((model, tokens))
+        return fn()
+
+    prompt = load_prompt()
+    case = _case()
+    run.evaluate_case(
+        case,
+        provider=RoutingProvider(GOOD),
+        prompt=prompt,
+        model="sum",
+        use_judge=True,
+        judge_model="jdg",
+        call=call,
+    )
+    cap = run.output_token_cap(prompt, run.MAX_WORDS)
+    assert [m for m, _ in seen] == ["sum", "jdg"]
+    # prompt estimate (len/4) plus the output cap: what Groq charges against its window up front
+    assert seen[0][1] > cap + len(case["text"]) // 4
+    assert seen[1][1] > run.JUDGE_MAX_TOKENS + len(case["text"]) // 4
+
+
 def test_report_meta_separates_summary_and_judge_tokens():
     prompt = load_prompt()
     p = RoutingProvider('{"faithfulness": 3, "coverage": 4, "issues": ["invented a number"]}')

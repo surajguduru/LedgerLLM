@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.llm import get_provider
+from app.llm import build_provider, get_provider
 from app.llm.base import ProviderError
 from app.llm.openai_compat import PRESETS, OpenAICompatibleProvider, parse_retry_after
 from app.models import AuditEvent, BudgetPeriod, UsageLedger
@@ -164,6 +164,33 @@ def test_get_provider_threads_reasoning_effort_setting(monkeypatch, env, expecte
         monkeypatch.undo()
         get_settings.cache_clear()
         get_provider.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("setting", "override", "expected"),
+    [
+        (None, None, None),  # groq preset: nothing
+        (None, "low", "low"),
+        ("medium", None, "medium"),  # None keeps the setting
+        ("medium", "", None),  # "" sends nothing whatever the setting
+        ("medium", "high", "high"),
+    ],
+)
+def test_build_provider_takes_its_own_reasoning_effort(monkeypatch, setting, override, expected):
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    if setting is None:
+        monkeypatch.delenv("LLM_REASONING_EFFORT", raising=False)
+    else:
+        monkeypatch.setenv("LLM_REASONING_EFFORT", setting)
+    get_settings.cache_clear()
+    try:
+        p = build_provider(reasoning_effort=override)
+        assert p.reasoning_effort == expected
+        assert build_provider(reasoning_effort=override) is not p  # never shared
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
 
 
 def test_reasoning_tokens_default_to_zero_when_not_reported():

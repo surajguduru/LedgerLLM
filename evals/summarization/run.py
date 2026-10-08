@@ -7,8 +7,8 @@
 
 Each golden.jsonl case (the document TEXT, not a URL, so it cannot drift) is summarised through the real
 feature code, then checked programmatically (key-point hit rate, length ratio, must_not_include leaks) and,
-with a real provider, scored by an LLM judge on another model of the same family (D21): a rubric prompt, strict
-JSON validation, one retry, and `judge_error` for cases that still fail. Calls are paced per model for the free
+with a real provider, scored by an LLM judge on a different model (D21: on Groq a larger model of another family,
+on Gemini a sibling model): a rubric prompt, strict JSON validation, one retry, and `judge_error` for cases that still fail. Calls are paced per model for the free
 tier (requests and estimated tokens per minute) and back off on 429/5xx, for as long as the server's Retry-After
 says when it sends one. thresholds.yaml has a `mock` section (the mock cannot summarise, so it gates
 plumbing only) and a `model` section (the quality gate). Results go to results/last_<provider>.json with run
@@ -63,6 +63,10 @@ PROVIDER_MODELS = {
     "gemini": ("gemini-3.8-flash", "gemini-3.5-flash-lite"),
     "groq": ("qwen/qwen3.8-27b", "openai/gpt-oss-120b"),
 }
+
+# The judge has its own provider instance, so its reasoning_effort is set apart from the summarizer's.
+# gpt-oss reasons by default and counts it in completion_tokens; "low" cut that to ~7 tokens (probe, 8 Oct).
+JUDGE_REASONING_EFFORT = {"openai/gpt-oss-": "low"}  # model-name prefix -> effort
 
 # Gemini 3 models spend output tokens on hidden reasoning before the answer; 300 tokens can leave an empty reply.
 JUDGE_MAX_TOKENS = 2048
@@ -273,9 +277,12 @@ def evaluate_case(
     model: str,
     use_judge: bool,
     judge_model: str | None = None,
+    judge_provider=None,
     call=_direct,
 ) -> dict:
     """Summarise one golden case, run the programmatic checks and (optionally) the judge.
+
+    `judge_provider` defaults to `provider`; the CLI passes a separate instance with its own reasoning_effort.
 
     A provider error that survives the back-off gives up on this case only: the row carries `error` and, when
     judged, counts as a judge error, so one rate-limited case cannot crash a 30-case run.
@@ -317,7 +324,7 @@ def evaluate_case(
     if use_judge:
         try:
             row["judge"] = judge(
-                provider,
+                judge_provider or provider,
                 case["text"],
                 r.text,
                 judge_model,
@@ -426,6 +433,14 @@ def default_judge_model(model: str) -> str:
     return DEFAULT_JUDGE_MODELS.get(model, model)
 
 
+def default_judge_reasoning_effort(judge_model: str) -> str | None:
+    """ "low" for gpt-oss judges; else None, the provider's preset default (nothing on Groq, "low" on Gemini)."""
+    for prefix, effort in JUDGE_REASONING_EFFORT.items():
+        if judge_model.startswith(prefix):
+            return effort
+    return None
+
+
 def resolve_models(
     provider: str, model: str | None, judge_model: str | None, *, default_model: str
 ) -> tuple[str, str | None]:
@@ -456,6 +471,7 @@ def build_report(
     rpm: float,
     wall_time_s: float,
     tpm: float = 0,
+    reasoning_effort: dict | None = None,
 ) -> dict:
     summary_tokens = sum(r.get("tokens", 0) for r in rows)
     judge_tokens = sum(r.get("judge", {}).get("judge_tokens", 0) for r in rows)
@@ -464,6 +480,7 @@ def build_report(
         "provider": provider,
         "summarizer_model": model,
         "judge_model": judge_model,
+        "reasoning_effort": reasoning_effort or {},
         "timestamp_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "n": len(rows),
         "rpm": rpm,
@@ -534,6 +551,12 @@ def main() -> int:
         "else the summarizer model",
     )
     ap.add_argument(
+        "--judge-reasoning-effort",
+        default=None,
+        help="reasoning_effort for the judge only (default: low for openai/gpt-oss-*, else the provider "
+        "preset; '' sends nothing). The summarizer keeps LLM_REASONING_EFFORT / its preset",
+    )
+    ap.add_argument(
         "--prompt-version", default=None, help="e.g. summarize_v2; defaults to settings"
     )
     ap.add_argument(
@@ -557,13 +580,19 @@ def main() -> int:
 
     os.environ["LLM_PROVIDER"] = args.provider
     from app.config import get_settings
-    from app.llm import get_provider
+    from app.llm import build_provider, get_provider
 
     provider = get_provider()
     model, judge_model = resolve_models(
         args.provider, args.model, args.judge_model, default_model=get_settings().default_model
     )
     use_judge = judge_model is not None
+    judge_provider = None
+    if use_judge:
+        effort = args.judge_reasoning_effort
+        if effort is None:
+            effort = default_judge_reasoning_effort(judge_model)
+        judge_provider = build_provider(reasoning_effort=effort)
     rpm = args.rpm if args.rpm is not None else (0 if args.provider == "mock" else DEFAULT_RPM)
     tpm = args.tpm if args.tpm is not None else DEFAULT_TPM.get(args.provider, 0)
     pacer = Pacer(rpm, tpm=tpm)
@@ -584,6 +613,7 @@ def main() -> int:
             model=model,
             use_judge=use_judge,
             judge_model=judge_model,
+            judge_provider=judge_provider,
             call=call,
         )
         print(f"  [{i}/{len(cases)}] {progress_line(row)}", flush=True)
@@ -598,6 +628,10 @@ def main() -> int:
         rpm=rpm,
         tpm=tpm,
         wall_time_s=time.monotonic() - t0,
+        reasoning_effort={
+            "summarizer": getattr(provider, "reasoning_effort", None),
+            "judge": getattr(judge_provider, "reasoning_effort", None),
+        },
     )
     print_report(report)
     section = "model" if use_judge else "mock"
