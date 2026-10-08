@@ -34,8 +34,10 @@ needs a custom httpx transport that rewrites the target while still verifying th
 against the original host name, which is easy to get subtly wrong and deserves its own change
 (docs/DESIGN.md, D18).
 
-OWNER: Sai. Still to do: truncation strategy for long pages (head + tail, map-reduce as a stretch
-goal); content-type handling (PDF via pypdf is a stretch goal).
+Pages longer than the plan allows are shortened (head + tail) or map-reduced in
+app/feature/longdoc.py (D20), not here: the fetch returns the whole extracted text.
+
+OWNER: Sai. Still to do: content-type handling (PDF via pypdf is a stretch goal).
 """
 
 from __future__ import annotations
