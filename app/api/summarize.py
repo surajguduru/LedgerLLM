@@ -58,7 +58,7 @@ from app.llm import (
 )
 from app.models import BudgetPeriod
 from app.observability import metrics
-from app.plans import load_plans, microusd_to_usd
+from app.plans import format_usd, load_plans, microusd_to_usd
 from app.quality.online_judge import maybe_sample
 from app.schemas import (
     BudgetInfo,
@@ -141,6 +141,19 @@ def _run_guardrail(
         )
         return False
     return True
+
+
+def _budget_headers(*, limit: int, spent: int, committed: int, warning: bool) -> dict[str, str]:
+    """X-Budget-* for any response that reports the budget: 200, cache hit and 402 alike."""
+    headers = {
+        "X-Budget-Limit-USD": f"{microusd_to_usd(limit):.6f}",
+        "X-Budget-Spent-USD": f"{microusd_to_usd(spent):.6f}",
+    }
+    if warning:
+        headers["X-Budget-Warning"] = (
+            f"{format_usd(committed)} of {format_usd(limit)} USD committed this period"
+        )
+    return headers
 
 
 def _persistable(body: SummarizeResponse) -> str:
@@ -442,10 +455,7 @@ def _pipeline(
         committed = spent + (bp.reserved_microusd if bp else 0)
         warning = committed >= limit * load_plans().soft_warning_fraction
         response.headers.update(
-            {
-                "X-Budget-Limit-USD": f"{microusd_to_usd(limit):.6f}",
-                "X-Budget-Spent-USD": f"{microusd_to_usd(spent):.6f}",
-            }
+            _budget_headers(limit=limit, spent=spent, committed=committed, warning=warning)
         )
         body = SummarizeResponse(
             request_id=request_id,
@@ -554,17 +564,24 @@ def _pipeline(
     )
     reserved_at = datetime.now(UTC)
     decision = budget.reserve(db, tenant, plan, est_microusd, now=reserved_at)
-    budget_headers = {
-        "X-Budget-Limit-USD": f"{microusd_to_usd(decision.limit_microusd):.6f}",
-        "X-Budget-Spent-USD": f"{microusd_to_usd(decision.spent_microusd):.6f}",
-    }
+    budget_headers = _budget_headers(
+        limit=decision.limit_microusd,
+        spent=decision.spent_microusd,
+        committed=decision.spent_microusd + decision.reserved_microusd,
+        warning=decision.warning,
+    )
     response.headers.update(budget_headers)
     if not decision.allowed:
+        # Refused on this request's worst case, which may exceed what is left even when some is.
         raise _fail(
             db,
             status=402,
             code="budget_exceeded",
-            message=f"monthly budget of ${microusd_to_usd(decision.limit_microusd):.2f} exhausted for {decision.period}",
+            message=(
+                f"estimated cost ${format_usd(est_microusd)} exceeds remaining "
+                f"${format_usd(decision.remaining_microusd)} of the "
+                f"${format_usd(decision.limit_microusd)} monthly budget for {decision.period}"
+            ),
             request_id=request_id,
             auth=auth,
             latency_ms=elapsed(),
@@ -578,11 +595,6 @@ def _pipeline(
             },
         )
     db.info["open_reservation"] = (tenant.id, decision.period, est_microusd)
-    if decision.warning:
-        response.headers["X-Budget-Warning"] = (
-            f"{microusd_to_usd(decision.spent_microusd + decision.reserved_microusd):.4f} of "
-            f"{microusd_to_usd(decision.limit_microusd):.2f} USD committed this period"
-        )
     if decision.first_warning:
         audit(
             db,
