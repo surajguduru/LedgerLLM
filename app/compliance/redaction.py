@@ -13,14 +13,19 @@ from dataclasses import dataclass, field
 from typing import Any
 
 _CARD_CANDIDATE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
-_AADHAAR = re.compile(r"\b[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}\b")
+# Not right after '+' or a digit: +919876543210 is an international phone number.
+_AADHAAR = re.compile(r"(?<![+\d])\b[2-9]\d{3}[ -]?\d{4}[ -]?\d{4}\b")
 _PAN = re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b")
 _SECRET = re.compile(
     r"\b(?:sk-[A-Za-z0-9_-]{8,}|AIza[0-9A-Za-z_-]{20,}|llk_[A-Za-z0-9]{8}_[A-Za-z0-9_-]{8,})\b"
 )
 _IPV4 = re.compile(r"\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}\b")
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE_CANDIDATE = re.compile(r"(?<![\w.])\+?\d[\d\s().-]{8,16}\d(?![\w.])")
+# Starts at '+', '(' or a digit, so "(415) 555-0134" goes whole, but never inside a token such as
+# INV-2026-000123. A '.' only rules a match out when a digit is on its other side (IPs, decimals);
+# a full stop ending the sentence does not.
+_PHONE_CANDIDATE = re.compile(r"(?<![\w(\-/])(?<!\d\.)(?:\+|\()?\d[\d\s().-]{8,16}\d(?!\w|\.\d)")
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def _luhn_ok(digits: str) -> bool:
@@ -57,6 +62,11 @@ def _sub_phone(text: str) -> tuple[str, int]:
     def _repl(m: re.Match[str]) -> str:
         nonlocal n
         raw = m.group(0)
+        # A decimal (one '.', nothing else) is a number, not a dotted phone like 415.555.0134.
+        if raw.count(".") == 1 and raw.replace(".", "").isdigit():
+            return raw
+        if _ISO_DATE.fullmatch(raw):
+            return raw
         # Never eat card/Aadhaar-like digit runs: pure digit runs of 12-19
         # digits (ignoring spaces/dashes) without a leading '+' belong to
         # the specific patterns above (valid ones already replaced; invalid

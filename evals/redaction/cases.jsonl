@@ -20,3 +20,5 @@
 {"id": "red-020", "text": "Gateway 192.168.1.1 down.", "expected_types": ["ipv4"], "must_keep": ["Gateway"]}
 {"id": "red-021", "text": "Version 999.1.1.1 kept, host 8.8.8.8 logged.", "expected_types": ["ipv4"], "must_keep": ["999.1.1.1"]}
 {"id": "red-022", "text": "Email jane@acme.io, card 4111111111111111, host 10.0.0.1.", "expected_types": ["email", "credit_card", "ipv4"]}
+{"id": "red-023", "text": "For refunds call +91 98765 43210.", "expected_types": ["phone"], "must_keep": ["For refunds call"]}
+{"id": "red-024", "text": "Meeting on 2026-10-08 about invoice INV-2026-000123.", "expected_types": [], "must_keep": ["2026-10-08", "INV-2026-000123"]}
