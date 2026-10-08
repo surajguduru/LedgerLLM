@@ -11,7 +11,8 @@ dist/
 build/
 *.egg-info/
 loadtest/results*
-evals/**/results/
+evals/**/results/*
+!evals/summarization/results/last_gemini.json
 .DS_Store
 # team-internal planning docs live outside the repo; never commit them
 team-private/

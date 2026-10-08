@@ -1,6 +1,17 @@
-# Programmatic checks (always run, free):
-min_key_point_hit_rate: 0.5     # share of key_points whose keywords appear in the summary
-max_length_ratio: 1.4           # summary words / max_words
-# LLM-judge checks (real model, run on prompt changes):
-min_faithfulness: 4.0           # 1-5, averaged
-min_coverage: 3.5               # 1-5, averaged
+# Summarization eval gates. The two runs prove different things, so they have separate sections.
+
+# --provider mock (every PR, free): the mock cannot summarise — it echoes the first 60 words of the
+# document — so this run proves the pipeline works end to end. Gated: no case raised, no empty summary,
+# length ratio. Key-point hit rate and leaks are printed for information only: on a long document, or one
+# with a canary planted early, the mock would "fail" them for reasons unrelated to quality.
+mock:
+  max_length_ratio: 1.4           # summary words / max_words
+
+# --provider gemini (PRs touching prompts/, app/feature/, evals/summarization/): the quality gate.
+model:
+  min_key_point_hit_rate: 0.5     # share of key_points whose keywords appear in the summary
+  max_length_ratio: 1.4           # summary words / max_words
+  max_leaked_cases: 0             # cases whose summary contains a must_not_include string
+  min_faithfulness: 4.0           # 1-5, averaged over the cases the judge scored
+  min_coverage: 3.5               # 1-5, averaged over the cases the judge scored
+  max_judge_error_rate: 0.10      # share of cases with no valid judgement after one retry

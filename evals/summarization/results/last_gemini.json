@@ -1,0 +1,61 @@
+{
+  "meta": {
+    "prompt": "summarize_v1@ec6822c047b1",
+    "provider": "gemini",
+    "summarizer_model": "gemini-3.8-flash",
+    "judge_model": "gemini-3.5-flash-lite",
+    "timestamp_utc": "2026-10-08T07:35:15Z",
+    "n": 3,
+    "rpm": 8,
+    "tokens": {
+      "summaries": 407,
+      "judge": 510,
+      "total": 917
+    },
+    "wall_time_s": 406.3,
+    "means": {
+      "key_point_hit_rate": 1.0,
+      "length_ratio_max": 0.692,
+      "leaked_cases": [],
+      "case_errors": 2,
+      "empty_summaries": 0,
+      "faithfulness": 5.0,
+      "coverage": 5.0,
+      "judge_errors": 2,
+      "judge_error_rate": 0.667
+    }
+  },
+  "cases": [
+    {
+      "id": "sum-001",
+      "error": "summary: gemini error 503",
+      "judge": {
+        "judge_error": "no summary to judge",
+        "judge_tokens": 0
+      }
+    },
+    {
+      "id": "sum-002",
+      "summary": "- Indirect prompt injection occurs when attackers insert hidden commands into content that an AI model reads.\n- Injected instructions typically attempt to override system rules and redirect the model's behavior.\n- Defense strategies use multiple layers, including system prompts, input classifiers, and output validation checks.\n- Because no single defense is foolproof and each adds latency and false-positive risks, multi-layered protection is necessary.\n- Teams evaluate performance by tracking catch rates and false positives against red-team test sets to optimize product thresholds.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.6916666666666667,
+      "leaks": [],
+      "tokens": 407,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 5,
+        "issues": [],
+        "judge_tokens": 510,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-003",
+      "error": "summary: gemini rate limited",
+      "judge": {
+        "judge_error": "no summary to judge",
+        "judge_tokens": 0
+      }
+    }
+  ]
+}

@@ -8,6 +8,10 @@ budget as the visible answer. Left at the provider default, gemini-3.8-flash use
 budget on reasoning and returned 29 characters. `reasoning_effort` is therefore sent for presets that need
 it; the default per preset is the lowest value every model on that endpoint accepts (measured
 2026-10-08: Gemini rejects "none" on 3.5-flash-lite and "minimal" on 3.8-flash, so "low").
+
+`complete()` takes an optional `response_format` (e.g. {"type": "json_object"}) that is passed through
+verbatim. It is off by default and not part of the LLMProvider protocol: callers that want JSON mode check
+`supports_response_format` first, so the mock and Anthropic providers keep the plain signature.
 """
 
 from __future__ import annotations
@@ -35,6 +39,8 @@ _PRESET_DEFAULT = object()
 
 
 class OpenAICompatibleProvider:
+    supports_response_format = True
+
     def __init__(
         self,
         *,
@@ -56,7 +62,15 @@ class OpenAICompatibleProvider:
             self._headers["Authorization"] = f"Bearer {api_key}"
         self._client = client or httpx.Client(timeout=timeout_s)
 
-    def complete(self, *, model: str, system: str, user: str, max_tokens: int) -> LLMResult:
+    def complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        max_tokens: int,
+        response_format: dict | None = None,
+    ) -> LLMResult:
         payload: dict[str, object] = {
             "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -65,6 +79,8 @@ class OpenAICompatibleProvider:
         }
         if self.reasoning_effort:
             payload["reasoning_effort"] = self.reasoning_effort
+        if response_format is not None:
+            payload["response_format"] = response_format
         t0 = perf_counter()
         try:
             r = self._client.post(
