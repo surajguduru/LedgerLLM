@@ -166,11 +166,63 @@ Rolling out a new prompt = add `summarize_v2.yaml` and set `SUMMARIZE_PROMPT_VER
 - **Model routing** — a request without `model` gets its plan's default: free → `gemini-3.5-flash-lite`, pro and
   enterprise → `gemini-3.8-flash`.
 
+## Abuse protection
+
+Two layers on the way in, one on the way out, and a rollout switch. Everything is in `app/guardrails/`.
+
+**Layer 1 — scored heuristics** (`heuristic_v2`, ~0.1 ms). Forty-odd regex *signals*, each with a weight;
+the verdict score is the noisy-OR of what fired. "Ignore all previous instructions" blocks on its own; the
+word "jailbreak" in a news article only raises the score. Text is normalised first (zero-width characters,
+leetspeak, Cyrillic look-alikes, spaced-out letters, base64 blobs), and a phrase that only appears after
+normalisation adds an *obfuscation* signal. Rules cover English plus es / fr / de / pt / it / ru / zh / ja / hi.
+Thresholds are per source — **0.8** for user instructions, **0.9** for fetched documents, which talk about
+system prompts and jailbreaks innocently far more often.
+
+**Layer 2 — LLM classifier** (`cascade_v1`, `GUARDRAIL_LLM=on`). Scores in the uncertain band (0.3–0.9) go to
+`gemini-3.5-flash-lite` for a 60-token JSON verdict; an "injection" answer lifts the score to the model's
+confidence, a "clean" answer caps it. **The classifier's tokens are billed to the tenant** as a
+`purpose="guardrail"` ledger row (the model must be in `prices.yaml`). Verdicts are cached by text hash, so a
+replay is free; a classifier outage degrades to the heuristic score rather than refusing the request.
+
+**Output moderation** (`output_rules_v1`). A canary phrase ("PWNED") or a URL that is not in the source
+proves the model obeyed the document instead of the user — the summary is **withheld**. Toxic phrases are
+withheld. PII (email, phone — the same redactor the request log uses) is **redacted and returned**: the
+tenant paid for the completion and `[EMAIL]` keeps the summary useful (DESIGN.md, D22).
+
+**Rollout.** `GUARDRAILS_MODE=shadow` records every would-be block as a `guardrail.shadow_block` audit
+event and serves the request anyway; `python -m evals.redteam.shadow_report` aggregates them by stage,
+category, method and source with the most recent (redacted) matches. Flip to `enforce` when the share
+looks right. A blocked request costs the tenant nothing beyond the classifier call; the budget reservation
+is released.
+
+**Evidence.** `make eval-redteam` runs 50 attacks and 50 benign look-alikes (`evals/redteam/cases.jsonl`) and
+fails CI below catch ≥ 0.90 / FPR ≤ 0.05. Heuristics-only: **96 % catch, 2 % FPR, p50 0.1 ms** (the two
+misses are a role-play persona and reversed text; the false positive is a security article quoting an
+attack string — all three are the LLM layer's job). `--llm on` measures the cascade with a real key.
+
+## Online quality monitoring
+
+The offline golden set (`make eval-summ`) says whether a prompt is good before it ships. The online judge
+says whether it stays good on real traffic. After every successful response the pipeline calls
+`app.quality.online_judge.maybe_sample`, which with probability `QUALITY_SAMPLE_RATE` (default 5 %) queues
+the request to a background worker — the response never waits. The worker, paced for the free tier, asks
+the judge model for faithfulness and coverage (1–5) and records:
+
+- `ledgerllm_quality_score{prompt_version,dimension}` — a histogram, so Grafana can plot quality per prompt
+  version next to the thumbs-up ratio;
+- a `quality_samples` row (request, prompt version, scores, the judge's issues);
+- a `usage_ledger` row with `purpose="judge"` under the tenant for attribution, **not settled against the
+  tenant's budget** — the tenant did not ask for the judge, so it is a platform cost (DESIGN.md, D17).
+
+`GET /admin/quality` returns means per prompt version, judge cost per 1,000 samples and the recent samples.
+Judge cost at list price: ≈ $0.0027 per sample on a 3k-token document, so ≈ **$0.13 per 1,000 requests** at 5 %.
+
 ## Evaluation and CI
 
 | Gate | Command | What it measures |
 |---|---|---|
-| Red-team | `make eval-redteam` | catch rate and false-positive rate of the input guardrail on `evals/redteam/cases.jsonl`; fails below `thresholds.yaml` |
+| Red-team | `make eval-redteam` | catch rate and false-positive rate of the input guardrail on `evals/redteam/cases.jsonl` (50 attacks / 50 benign); fails below `thresholds.yaml` (0.90 / 0.05); `--llm on` measures the cascade |
+| Shadow report | `python -m evals.redteam.shadow_report` | what `GUARDRAILS_MODE=shadow` would have blocked on real traffic, by stage / category / method / source |
 | Summarization | `make eval-summ` (`PROVIDER=gemini` for the LLM judge) | key-point coverage, length, leak checks; with the judge: faithfulness and coverage on a 1–5 scale |
 | Redaction | part of `make test` | every case in `evals/redaction/cases.jsonl` is redacted and nothing else is lost |
 
@@ -196,14 +248,18 @@ Measured values are recorded here as they are produced; conditions are stated ne
 | Throughput | pending | 50 Locust users, mock provider, one instance |
 | Burst quota test: admitted / refused (402), ledger total vs limit | pending | 50 users against a $0.02 budget |
 | Cost per request | pending | Gemini 3.8 Flash list price, bullets, 150 words |
-| Red-team catch rate / false-positive rate / added latency | pending | `evals/redteam` |
+| Red-team catch rate / false-positive rate / added latency (heuristics only) | 96 % / 2 % / p50 0.10 ms, p99 0.41 ms | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` |
+| Red-team catch rate / false-positive rate (cascade) | pending | `python -m evals.redteam.run --llm on`, needs `LLM_API_KEY` |
+| Guardrail classifier cost per 1,000 requests | ≈ $0.015 (instructions) – $0.07 (1.5k-token documents) | 12 % of eval cases in the uncertain band × Flash-Lite list price |
+| Online judge cost per 1,000 requests | ≈ $0.13 | 5 % sampled, 3k-token source, Gemini 3.8 Flash list price |
 | Summarization faithfulness / coverage (LLM judge, 1–5) | pending | `evals/summarization` |
 
 ## Observability
 
 `/metrics` exposes `ledgerllm_cost_microusd_total{tenant,model,purpose}`, `ledgerllm_tokens_total`,
 `ledgerllm_rejections_total{reason}`, `ledgerllm_llm_latency_seconds`, `ledgerllm_guardrail_verdicts_total`,
-`ledgerllm_feedback_total`, plus HTTP request counts and latency histograms. Grafana dashboards are provisioned
+`ledgerllm_feedback_total`, `ledgerllm_quality_score{prompt_version,dimension}`, plus HTTP request counts and
+latency histograms. Grafana dashboards are provisioned
 from `ops/grafana/dashboards/`. Logs are JSON with a `request_id` on every line; the `request_logs` (redacted)
 and `audit_events` tables explain every refusal after the fact.
 
@@ -212,7 +268,8 @@ and `audit_events` tables explain every refusal after the fact.
 Docker image (`Dockerfile`) deployed as a Render web service via `render.yaml`, with a Neon Postgres database
 (step-by-step runbook: [`docs/DEPLOY.md`](docs/DEPLOY.md)).
 Configuration is entirely environment variables: `DATABASE_URL`, `LLM_PROVIDER`, `LLM_API_KEY`,
-`ADMIN_TOKEN`, `GUARDRAILS_MODE`, `SUMMARIZE_PROMPT_VERSION`, `RESPONSE_CACHE_ENABLED`. Merges to `main` deploy automatically once CI
+`ADMIN_TOKEN`, `GUARDRAILS_MODE`, `GUARDRAIL_LLM`, `QUALITY_SAMPLE_RATE`, `SUMMARIZE_PROMPT_VERSION`,
+`RESPONSE_CACHE_ENABLED`. Merges to `main` deploy automatically once CI
 and both eval gates pass. The app is stateless, so it scales horizontally without changes.
 
 ## Repository layout
