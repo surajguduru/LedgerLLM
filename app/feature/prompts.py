@@ -74,6 +74,11 @@ def load_prompt(version: str | None = None) -> PromptSpec:
     settings = get_settings()
     version = version or settings.summarize_prompt_version
     path = settings.prompts_dir / f"{version}.yaml"
+    if not path.is_file():
+        available = sorted(p.stem for p in settings.prompts_dir.glob("*.yaml"))
+        raise FileNotFoundError(
+            f"unknown prompt version {version!r}: {path} does not exist (available: {available})"
+        )
     content = path.read_text()
     raw = yaml.safe_load(content)
     return PromptSpec(

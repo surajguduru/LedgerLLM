@@ -8,10 +8,20 @@ neither expand placeholders nor escape the <document> data wrapper.
 
 from __future__ import annotations
 
-import pytest
+import hashlib
+from typing import get_args
 
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from app.config import ROOT, get_settings
 from app.feature.prompts import PromptSpec, load_prompt
+from app.feature.summarize import output_token_cap
 from app.llm.mock import MockProvider
+from app.schemas import Style, SummarizeRequest
+
+PROMPT_FILE = ROOT / "prompts" / "summarize_v1.yaml"
 
 DOC = "The quarterly report covers revenue, costs and hiring plans for next year."
 
@@ -81,3 +91,49 @@ def test_mock_provider_output_unchanged_for_normal_documents(prompt):
     out = render(prompt, instructions="focus on costs")
     res = MockProvider().complete(model="m", system=prompt.system, user=out, max_tokens=100)
     assert res.text == "- " + DOC
+
+
+def test_every_style_maps_to_its_description(prompt):
+    raw = yaml.safe_load(PROMPT_FILE.read_text())
+    assert set(prompt.styles) == set(get_args(Style))
+    for style, description in raw["styles"].items():
+        out = render(prompt, style=style)
+        assert out.startswith(f"Summarize the document below as {description}, in at most 150")
+
+
+def test_default_and_unknown_style(prompt):
+    # The API only admits the three styles and defaults to bullets; render_user passes
+    # anything else through verbatim rather than failing (internal callers only).
+    assert SummarizeRequest(text="x").style == "bullets"
+    with pytest.raises(ValidationError):
+        SummarizeRequest(text="x", style="haiku")
+    assert "as haiku, in at most" in render(prompt, style="haiku")
+
+
+def test_output_token_cap_grows_with_max_words_and_respects_ceiling(prompt):
+    caps = [output_token_cap(prompt, w) for w in range(20, 601, 10)]
+    assert caps == sorted(caps)
+    assert caps[0] < caps[-1]
+    assert max(caps) <= prompt.max_tokens
+    assert output_token_cap(prompt, 600) == prompt.max_tokens
+
+
+def test_load_prompt_hash_is_stable_and_tracks_content(tmp_path, monkeypatch):
+    monkeypatch.setattr(get_settings(), "prompts_dir", tmp_path)
+    load_prompt.cache_clear()
+    try:
+        original = PROMPT_FILE.read_text()
+        (tmp_path / "summarize_v1.yaml").write_text(original)
+        first = load_prompt("summarize_v1").content_hash
+        load_prompt.cache_clear()
+        assert load_prompt("summarize_v1").content_hash == first
+        assert first == hashlib.sha256(original.encode()).hexdigest()[:12]
+
+        (tmp_path / "summarize_v1.yaml").write_text(original + "\n# edited\n")
+        load_prompt.cache_clear()
+        assert load_prompt("summarize_v1").content_hash != first
+
+        with pytest.raises(FileNotFoundError, match="unknown prompt version 'nope'"):
+            load_prompt("nope")
+    finally:
+        load_prompt.cache_clear()
