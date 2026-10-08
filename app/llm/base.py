@@ -12,6 +12,9 @@ class LLMResult:
     output_tokens: int
     latency_ms: int
     stop_reason: str | None = None
+    # Hidden reasoning ("thinking") tokens, when the provider reports them. Already counted in
+    # output_tokens, which is always what the provider bills for; this is for observability.
+    reasoning_tokens: int = 0
 
 
 class ProviderError(Exception):

@@ -96,11 +96,36 @@ class OpenAICompatibleProvider:
             raise ProviderError(f"{self.name} returned an unexpected body", retryable=True) from exc
 
         usage = data.get("usage") or {}
+        unreported = _unreported_output_tokens(usage)
+        details = usage.get("completion_tokens_details") or {}
+        completion = usage.get("completion_tokens")
         return LLMResult(
             text=text,
             model=data.get("model") or model,
             input_tokens=int(usage.get("prompt_tokens") or estimate_tokens(system + user)),
-            output_tokens=int(usage.get("completion_tokens") or estimate_tokens(text)),
+            output_tokens=(int(completion) if completion is not None else estimate_tokens(text))
+            + unreported,
             latency_ms=latency_ms,
             stop_reason=choice.get("finish_reason"),
+            reasoning_tokens=int(details.get("reasoning_tokens") or unreported),
         )
+
+
+def _unreported_output_tokens(usage: dict) -> int:
+    """Tokens in `total_tokens` that are neither prompt nor completion: hidden reasoning.
+
+    OpenAI counts reasoning inside `completion_tokens` (and itemises it in
+    `completion_tokens_details`), so this is 0 there. Gemini's endpoint leaves reasoning out of
+    `completion_tokens` but includes it in `total_tokens`, and bills it as output. Adding the gap
+    back keeps `output_tokens` equal to what the provider charges for. `max_tokens` caps visible
+    plus reasoning tokens together, so the reservation estimate stays an upper bound.
+    """
+    try:
+        gap = (
+            int(usage["total_tokens"])
+            - int(usage["prompt_tokens"])
+            - int(usage["completion_tokens"])
+        )
+    except (KeyError, TypeError, ValueError):
+        return 0
+    return max(0, gap)

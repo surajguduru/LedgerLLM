@@ -126,3 +126,35 @@ def test_get_provider_threads_reasoning_effort_setting(monkeypatch, env, expecte
         monkeypatch.undo()
         get_settings.cache_clear()
         get_provider.cache_clear()
+
+
+def test_reasoning_tokens_default_to_zero_when_not_reported():
+    usage = {"prompt_tokens": 120, "completion_tokens": 8, "total_tokens": 128}
+    res = _provider(lambda r: _ok(usage=usage)).complete(
+        model="m", system="s", user="u", max_tokens=100
+    )
+    assert res.reasoning_tokens == 0 and res.output_tokens == 8
+
+
+def test_reasoning_tokens_parsed_from_completion_details():
+    # OpenAI style: reasoning is itemised and already included in completion_tokens.
+    usage = {
+        "prompt_tokens": 100,
+        "completion_tokens": 90,
+        "total_tokens": 190,
+        "completion_tokens_details": {"reasoning_tokens": 64},
+    }
+    res = _provider(lambda r: _ok(usage=usage)).complete(
+        model="m", system="s", user="u", max_tokens=100
+    )
+    assert res.reasoning_tokens == 64 and res.output_tokens == 90
+
+
+def test_gemini_hidden_reasoning_is_billed_as_output():
+    # Gemini style, observed 2026-10-08: reasoning only shows up in total_tokens.
+    usage = {"prompt_tokens": 355, "completion_tokens": 6, "total_tokens": 601}
+    res = _provider(lambda r: _ok(content="- The council voted", usage=usage)).complete(
+        model="gemini-3.8-flash", system="s", user="u", max_tokens=250
+    )
+    assert res.reasoning_tokens == 240
+    assert res.output_tokens == 246 <= 250  # still within the reserved max_tokens
