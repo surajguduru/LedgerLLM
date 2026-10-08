@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import socket
 
+import httpx
 import pytest
 
-from app.feature.fetch import FetchBlocked, FetchError, validate_url
+from app.config import Settings
+from app.feature.fetch import FetchBlocked, FetchError, fetch_url, validate_url
 from tests.conftest import summarize
 
 _REAL_GETADDRINFO = socket.getaddrinfo
@@ -129,6 +131,82 @@ def test_block_message_does_not_echo_the_resolved_address(dns):
     with pytest.raises(FetchBlocked) as info:
         validate_url("http://internal.example/")
     assert "10.1.2.3" not in str(info.value)
+
+
+# --- redirects -------------------------------------------------------------------------------
+
+PAGE = "Plain text page about ledgers and budgets."
+
+
+def _client(routes: dict[str, httpx.Response], seen: list[str]) -> httpx.Client:
+    """A client whose transport answers from `routes` (full URL -> response) and logs requests."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return routes.get(str(request.url), httpx.Response(404))
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def _redirect(location: str, status: int = 302) -> httpx.Response:
+    return httpx.Response(status, headers={"Location": location})
+
+
+def _ok(body: str = PAGE) -> httpx.Response:
+    return httpx.Response(200, text=body, headers={"Content-Type": "text/plain"})
+
+
+def test_redirect_to_public_host_is_followed(dns):
+    dns["news.example"] = [PUBLIC_V4]
+    seen: list[str] = []
+    routes = {
+        "http://example.com/a": _redirect("https://news.example/b", 301),
+        "https://news.example/b": _ok(),
+    }
+    page = fetch_url("http://example.com/a", Settings(), client=_client(routes, seen))
+    assert page.text == PAGE
+    assert page.final_url == "https://news.example/b"
+    assert seen == ["http://example.com/a", "https://news.example/b"]
+
+
+def test_redirect_to_metadata_is_blocked_at_the_hop():
+    seen: list[str] = []
+    routes = {"http://example.com/a": _redirect("http://169.254.169.254/latest/meta-data/")}
+    with pytest.raises(FetchBlocked, match="redirect target"):
+        fetch_url("http://example.com/a", Settings(), client=_client(routes, seen))
+    assert seen == ["http://example.com/a"]  # the metadata address was never requested
+
+
+def test_relative_location_is_resolved_against_the_current_url():
+    seen: list[str] = []
+    routes = {
+        "http://example.com/docs/a": _redirect("b"),
+        "http://example.com/docs/b": _redirect("/final", 307),
+        "http://example.com/final": _ok(),
+    }
+    page = fetch_url("http://example.com/docs/a", Settings(), client=_client(routes, seen))
+    assert page.final_url == "http://example.com/final"
+    assert len(seen) == 3
+
+
+def test_three_redirects_are_followed_and_a_fourth_is_an_error():
+    seen: list[str] = []
+    routes = {f"http://example.com/{i}": _redirect(f"/{i + 1}") for i in range(4)}
+    routes["http://example.com/3"] = _ok()
+    page = fetch_url("http://example.com/0", Settings(), client=_client(routes, seen))
+    assert page.final_url == "http://example.com/3"
+
+    routes["http://example.com/3"] = _redirect("/4")
+    routes["http://example.com/4"] = _ok()
+    with pytest.raises(FetchError, match="too many redirects") as info:
+        fetch_url("http://example.com/0", Settings(), client=_client(routes, []))
+    assert not isinstance(info.value, FetchBlocked)
+
+
+def test_redirect_without_location_is_an_error():
+    routes = {"http://example.com/a": httpx.Response(302)}
+    with pytest.raises(FetchError, match="without a Location"):
+        fetch_url("http://example.com/a", Settings(), client=_client(routes, []))
 
 
 # --- pipeline --------------------------------------------------------------------------------

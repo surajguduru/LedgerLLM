@@ -15,6 +15,11 @@ reaches the private network. `validate_url` is the guard:
 Refusals raise `FetchBlocked` (400 `fetch_blocked`); a name that does not resolve is an ordinary
 `FetchError` (422 `fetch_failed`). Messages say why without naming the resolved address.
 
+Redirects are where a guard that only checks the first URL fails: a public page answers
+`302 Location: http://169.254.169.254/`. `fetch_url` therefore never lets httpx follow redirects;
+it follows at most `MAX_REDIRECTS` hops itself, resolving each `Location` against the current URL
+and validating the result before requesting it.
+
 OWNER: Sai. Still to do: truncation strategy for long pages (head + tail, map-reduce as a stretch
 goal); content-type handling (PDF via pypdf is a stretch goal).
 """
@@ -25,6 +30,7 @@ import ipaddress
 import socket
 from dataclasses import dataclass
 from time import perf_counter
+from urllib.parse import urljoin
 
 import httpx
 import trafilatura
@@ -37,6 +43,8 @@ ALLOWED_SCHEMES = frozenset({"http", "https"})
 DEFAULT_PORTS = {"http": 80, "https": 443}
 # Link-local, so is_global already refuses it; named explicitly because it is the one that matters.
 METADATA_ADDRESS = ipaddress.IPv4Address("169.254.169.254")
+MAX_REDIRECTS = 3
+HEADERS = {"User-Agent": "LedgerLLM/0.1 (+https://github.com/; summarizer bot)"}
 
 
 class FetchError(Exception):
@@ -105,17 +113,46 @@ def _extract(html: str) -> tuple[str, str]:
     return title, text
 
 
-def fetch_url(url: str, settings: Settings) -> FetchedPage:
-    t0 = perf_counter()
-    validate_url(url)
-    headers = {"User-Agent": "LedgerLLM/0.1 (+https://github.com/; summarizer bot)"}
+def _validate_hop(url: str, hop: int) -> None:
     try:
-        with httpx.Client(
-            timeout=settings.fetch_timeout_s, follow_redirects=True, headers=headers
-        ) as c:
-            r = c.get(url)
-    except httpx.HTTPError as exc:
-        raise FetchError(f"fetch failed: {exc.__class__.__name__}") from exc
+        validate_url(url)
+    except FetchBlocked as exc:
+        if hop == 0:
+            raise
+        raise FetchBlocked(f"redirect target refused: {exc}") from exc
+
+
+def _get(client: httpx.Client, url: str, settings: Settings) -> httpx.Response:
+    """GET `url`, following up to MAX_REDIRECTS redirects and validating every target first."""
+    current = url
+    for hop in range(MAX_REDIRECTS + 1):
+        _validate_hop(current, hop)
+        try:
+            r = client.get(
+                current,
+                headers=HEADERS,
+                follow_redirects=False,
+                timeout=settings.fetch_timeout_s,
+            )
+        except httpx.HTTPError as exc:
+            raise FetchError(f"fetch failed: {exc.__class__.__name__}") from exc
+        if not 300 <= r.status_code < 400:
+            return r
+        location = r.headers.get("location")
+        if not location:
+            raise FetchError(f"upstream returned HTTP {r.status_code} without a Location header")
+        current = urljoin(current, location)
+    raise FetchError(f"too many redirects (more than {MAX_REDIRECTS})")
+
+
+def fetch_url(url: str, settings: Settings, *, client: httpx.Client | None = None) -> FetchedPage:
+    """Fetch `url` and extract its text. `client` lets tests inject an httpx.MockTransport."""
+    t0 = perf_counter()
+    if client is None:
+        with httpx.Client(timeout=settings.fetch_timeout_s, follow_redirects=False) as own:
+            r = _get(own, url, settings)
+    else:
+        r = _get(client, url, settings)
     if r.status_code >= 400:
         raise FetchError(f"upstream returned HTTP {r.status_code}")
 
