@@ -424,6 +424,7 @@ def _pipeline(
         style=payload.style,
         max_words=payload.max_words,
         instructions=payload.instructions,
+        title=page.title,
         text=page.text,
         guardrail_version=f"{rules_version()}:{settings.guardrails_mode}",
     )
@@ -615,7 +616,10 @@ def _pipeline(
             stage="input",
         )
         if not verdict_in.blocked:
-            verdict_doc = classify_input(page.text, source="document")
+            # The title goes into the prompt next to the text (and the client chooses it on a
+            # text request), so it is scanned as part of the document rather than trusted.
+            doc_text = f"{page.title}\n\n{page.text}" if page.title else page.text
+            verdict_doc = classify_input(doc_text, source="document")
             guardrail_cost += _book_guardrail(
                 db,
                 verdict=verdict_doc,
