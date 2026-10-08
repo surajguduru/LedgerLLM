@@ -31,7 +31,14 @@ from app.config import Settings, get_settings
 from app.db import get_db
 from app.errors import ApiError
 from app.feature.fetch import FetchBlocked, FetchedPage, FetchError, fetch_url
-from app.feature.longdoc import truncate_head_tail
+from app.feature.longdoc import (
+    MapReduceFailed,
+    StageResult,
+    combine,
+    plan_map_reduce,
+    prepare_text,
+    run_map_reduce,
+)
 from app.feature.prompts import load_prompt
 from app.feature.summarize import build_user_prompt, output_token_cap, run_summary
 from app.guardrails.input import classify_input
@@ -322,9 +329,13 @@ def _pipeline(
             content_type="text/plain",
             fetched_ms=0,
         )
-    page.text, omitted = truncate_head_tail(page.text, plan.max_input_chars)
-    truncated = omitted > 0
-    strategy = "head_tail" if truncated else "full"
+    # Long documents (D20): head+tail truncation, or map-reduce on plans that allow it.
+    prepared = prepare_text(
+        page.text,
+        max_input_chars=plan.max_input_chars,
+        map_reduce_max_chars=plan.map_reduce_max_chars,
+    )
+    page.text, strategy, truncated = prepared.text, prepared.strategy, prepared.omitted > 0
 
     # 4½. response cache (owner: Suraj) — a hit costs nothing and skips the budget entirely (D16)
     prompt = load_prompt(settings.summarize_prompt_version)
@@ -427,22 +438,35 @@ def _pipeline(
         return body
 
     # 5. estimate + reserve budget -------------------------------------------------------------
-    user_prompt = build_user_prompt(
-        prompt,
-        page,
-        style=payload.style,
-        max_words=payload.max_words,
-        instructions=payload.instructions,
-    )
-    max_tokens = output_token_cap(prompt, payload.max_words)
+    mr_plan = None
+    if strategy == "map_reduce":
+        mr_plan = plan_map_reduce(
+            prompt,
+            page,
+            chunk_chars=plan.max_input_chars,
+            style=payload.style,
+            max_words=payload.max_words,
+            instructions=payload.instructions,
+        )
+        calls = [(c.est_input_tokens, c.max_tokens) for c in mr_plan.calls]
+    else:
+        user_prompt = build_user_prompt(
+            prompt,
+            page,
+            style=payload.style,
+            max_words=payload.max_words,
+            instructions=payload.instructions,
+        )
+        max_tokens = output_token_cap(prompt, payload.max_words)
+        calls = [(estimate_tokens(prompt.system) + estimate_tokens(user_prompt), max_tokens)]
     # Fallback chain (D19): only to a model on the tenant's plan, and the reservation covers the
-    # priciest model that may answer, so settling can never exceed it.
+    # priciest model that may answer, so settling can never exceed it. Every map-reduce call may
+    # fall back on its own, so one reservation covers the sum of the per-call worst cases (D20).
     fallback = fallback_model()
     allow_fallback = fallback is not None and fallback != model and fallback in plan.allowed_models
-    est_input = estimate_tokens(prompt.system) + estimate_tokens(user_prompt)
-    est_microusd = max(
-        estimate_cost_microusd(m, est_input, max_tokens)
-        for m in ([model, fallback] if allow_fallback else [model])
+    chain = [model, fallback] if allow_fallback else [model]
+    est_microusd = sum(
+        max(estimate_cost_microusd(m, est_in, cap) for m in chain) for est_in, cap in calls
     )
     decision = budget.reserve(db, tenant, plan, est_microusd)
     budget_headers = {
@@ -510,16 +534,37 @@ def _pipeline(
     # 7. LLM -----------------------------------------------------------------------------------
     provider = get_provider()
     try:
-        result = run_summary(
-            provider,
-            model=model,
-            prompt=prompt,
-            user_prompt=user_prompt,
-            max_tokens=max_tokens,
-            allow_fallback=allow_fallback,
-        )
+        if mr_plan is not None:
+            stages = run_map_reduce(
+                provider, mr_plan, model=model, prompt=prompt, allow_fallback=allow_fallback
+            )
+        else:
+            single = run_summary(
+                provider,
+                model=model,
+                prompt=prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+                allow_fallback=allow_fallback,
+            )
+            stages = [StageResult(None, single)]
     except ProviderError as exc:
+        # One failed call fails the request: the whole reservation is released and nothing is
+        # billed, including map calls that had already answered; the platform absorbs those (D20).
         budget.release(db, tenant.id, decision.period, est_microusd)
+        if isinstance(exc, MapReduceFailed) and exc.completed:
+            done = [s.result for s in exc.completed]
+            log.warning(
+                "map_reduce_failed_absorbed",
+                tenant=tenant.id,
+                stage=exc.stage,
+                calls=len(done),
+                tokens_in=sum(r.input_tokens for r in done),
+                tokens_out=sum(r.output_tokens for r in done),
+                cost_microusd=sum(
+                    compute_cost_microusd(r.model, r.input_tokens, r.output_tokens) for r in done
+                ),
+            )
         metrics.UPSTREAM_ERRORS.labels(model, str(exc.retryable).lower()).inc()
         raise _fail(
             db,
@@ -534,8 +579,13 @@ def _pipeline(
             headers={"Retry-After": "2"} if exc.retryable else None,
             raw_input=raw_for_log,
         ) from exc
-    answered = result.model  # the fallback model if the chain was used; bill and label by it
-    metrics.LLM_LATENCY.labels(answered).observe(result.latency_ms / 1000)
+    # Each call is billed and labelled by the model that answered it; usage names the requested
+    # model unless every call fell back (longdoc.combine).
+    for s in stages:
+        metrics.LLM_LATENCY.labels(s.result.model).observe(s.result.latency_ms / 1000)
+    result = combine(stages, requested_model=model)
+    answered = result.model
+    prompt_version = f"{prompt.version}@{prompt.content_hash}"
 
     # 8. output guardrail ----------------------------------------------------------------------
     verdict_out = moderate_output(result.text) if mode != "off" else PASS
@@ -562,30 +612,35 @@ def _pipeline(
         )
 
     # 9. settle + ledger -----------------------------------------------------------------------
-    actual_microusd = compute_cost_microusd(answered, result.input_tokens, result.output_tokens)
+    # One ledger row per model call, all purpose="completion"; the stage is in prompt_version.
+    actual_microusd = 0
+    for s in stages:
+        r = s.result
+        cost = compute_cost_microusd(r.model, r.input_tokens, r.output_tokens)
+        actual_microusd += cost
+        ledger.book(
+            db,
+            tenant_id=tenant.id,
+            key_id=key.id,
+            request_id=request_id,
+            purpose="completion",
+            model=r.model,
+            input_tokens=r.input_tokens,
+            output_tokens=r.output_tokens,
+            cost_microusd=cost,
+            price_version=load_prices().version,
+            prompt_version=prompt_version + s.ledger_suffix,
+            latency_ms=r.latency_ms,
+        )
+        metrics.record_booking(
+            tenant=tenant.id,
+            model=r.model,
+            purpose="completion",
+            input_tokens=r.input_tokens,
+            output_tokens=r.output_tokens,
+            cost_microusd=cost,
+        )
     budget.settle(db, tenant.id, decision.period, est_microusd, actual_microusd)
-    ledger.book(
-        db,
-        tenant_id=tenant.id,
-        key_id=key.id,
-        request_id=request_id,
-        purpose="completion",
-        model=answered,
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        cost_microusd=actual_microusd,
-        price_version=load_prices().version,
-        prompt_version=f"{result.prompt_version}@{result.prompt_hash}",
-        latency_ms=result.latency_ms,
-    )
-    metrics.record_booking(
-        tenant=tenant.id,
-        model=answered,
-        purpose="completion",
-        input_tokens=result.input_tokens,
-        output_tokens=result.output_tokens,
-        cost_microusd=actual_microusd,
-    )
 
     # 10. response, log, audit, idempotency store ----------------------------------------------
     spent_after = decision.spent_microusd + actual_microusd + guardrail_cost
@@ -601,7 +656,7 @@ def _pipeline(
         ),
         usage=UsageInfo(
             model=answered,
-            prompt_version=f"{result.prompt_version}@{result.prompt_hash}",
+            prompt_version=prompt_version,
             price_version=load_prices().version,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
@@ -647,7 +702,7 @@ def _pipeline(
             cache.CachedSummary(
                 text=result.text,
                 model=answered,
-                prompt_version=f"{result.prompt_version}@{result.prompt_hash}",
+                prompt_version=prompt_version,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
             ),
@@ -657,7 +712,7 @@ def _pipeline(
         maybe_sample(
             request_id=request_id,
             tenant_id=tenant.id,
-            prompt_version=f"{result.prompt_version}@{result.prompt_hash}",
+            prompt_version=prompt_version,
             source_text=page.text,
             summary=result.text,
         )
@@ -680,5 +735,7 @@ def _pipeline(
         tokens_in=result.input_tokens,
         tokens_out=result.output_tokens,
         llm_ms=result.latency_ms,
+        strategy=strategy,
+        calls=len(stages),
     )
     return body
