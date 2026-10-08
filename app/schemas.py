@@ -46,6 +46,8 @@ class UsageInfo(BaseModel):
     cost_usd: float
     latency_ms: int
     cached: bool = False
+    provider: str | None = None  # provider that answered, e.g. "gemini"
+    fallback_from: str | None = None  # set when the fallback model answered: the model that failed
 
 
 class BudgetInfo(BaseModel):

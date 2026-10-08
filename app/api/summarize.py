@@ -36,7 +36,7 @@ from app.feature.summarize import build_user_prompt, output_token_cap, run_summa
 from app.guardrails.input import classify_input
 from app.guardrails.output import moderate_output
 from app.guardrails.types import PASS, GuardrailVerdict
-from app.llm import ProviderError, estimate_tokens, get_provider
+from app.llm import ProviderError, estimate_tokens, fallback_model, get_provider
 from app.models import BudgetPeriod
 from app.observability import metrics
 from app.plans import load_plans, microusd_to_usd
@@ -430,8 +430,14 @@ def _pipeline(
         instructions=payload.instructions,
     )
     max_tokens = output_token_cap(prompt, payload.max_words)
-    est_microusd = estimate_cost_microusd(
-        model, estimate_tokens(prompt.system) + estimate_tokens(user_prompt), max_tokens
+    # Fallback chain (D19): only to a model on the tenant's plan, and the reservation covers the
+    # priciest model that may answer, so settling can never exceed it.
+    fallback = fallback_model()
+    allow_fallback = fallback is not None and fallback != model and fallback in plan.allowed_models
+    est_input = estimate_tokens(prompt.system) + estimate_tokens(user_prompt)
+    est_microusd = max(
+        estimate_cost_microusd(m, est_input, max_tokens)
+        for m in ([model, fallback] if allow_fallback else [model])
     )
     decision = budget.reserve(db, tenant, plan, est_microusd)
     budget_headers = {
@@ -500,7 +506,12 @@ def _pipeline(
     provider = get_provider()
     try:
         result = run_summary(
-            provider, model=model, prompt=prompt, user_prompt=user_prompt, max_tokens=max_tokens
+            provider,
+            model=model,
+            prompt=prompt,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+            allow_fallback=allow_fallback,
         )
     except ProviderError as exc:
         budget.release(db, tenant.id, decision.period, est_microusd)
@@ -518,7 +529,8 @@ def _pipeline(
             headers={"Retry-After": "2"} if exc.retryable else None,
             raw_input=raw_for_log,
         ) from exc
-    metrics.LLM_LATENCY.labels(model).observe(result.latency_ms / 1000)
+    answered = result.model  # the fallback model if the chain was used; bill and label by it
+    metrics.LLM_LATENCY.labels(answered).observe(result.latency_ms / 1000)
 
     # 8. output guardrail ----------------------------------------------------------------------
     verdict_out = moderate_output(result.text) if mode != "off" else PASS
@@ -545,7 +557,7 @@ def _pipeline(
         )
 
     # 9. settle + ledger -----------------------------------------------------------------------
-    actual_microusd = compute_cost_microusd(model, result.input_tokens, result.output_tokens)
+    actual_microusd = compute_cost_microusd(answered, result.input_tokens, result.output_tokens)
     budget.settle(db, tenant.id, decision.period, est_microusd, actual_microusd)
     ledger.book(
         db,
@@ -553,7 +565,7 @@ def _pipeline(
         key_id=key.id,
         request_id=request_id,
         purpose="completion",
-        model=model,
+        model=answered,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cost_microusd=actual_microusd,
@@ -563,7 +575,7 @@ def _pipeline(
     )
     metrics.record_booking(
         tenant=tenant.id,
-        model=model,
+        model=answered,
         purpose="completion",
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
@@ -579,13 +591,15 @@ def _pipeline(
             url=page.url, title=page.title, chars=len(page.text), truncated=truncated
         ),
         usage=UsageInfo(
-            model=model,
+            model=answered,
             prompt_version=f"{result.prompt_version}@{result.prompt_hash}",
             price_version=load_prices().version,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             cost_usd=microusd_to_usd(actual_microusd),
             latency_ms=result.latency_ms,
+            provider=result.provider,
+            fallback_from=result.fallback_from,
         ),
         budget=BudgetInfo(
             period=decision.period,
@@ -607,7 +621,7 @@ def _pipeline(
         endpoint="/v1/summarize",
         status_code=200,
         latency_ms=elapsed(),
-        model=model,
+        model=answered,
         input_tokens=result.input_tokens,
         output_tokens=result.output_tokens,
         cost_microusd=actual_microusd,
@@ -623,7 +637,7 @@ def _pipeline(
             ckey,
             cache.CachedSummary(
                 text=result.text,
-                model=model,
+                model=answered,
                 prompt_version=f"{result.prompt_version}@{result.prompt_hash}",
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
@@ -651,7 +665,8 @@ def _pipeline(
     log.info(
         "summarize_ok",
         tenant=tenant.id,
-        model=model,
+        model=answered,
+        fallback_from=result.fallback_from,
         cost_microusd=actual_microusd,
         tokens_in=result.input_tokens,
         tokens_out=result.output_tokens,

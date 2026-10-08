@@ -7,10 +7,15 @@ import json
 import httpx
 import pytest
 from prometheus_client import REGISTRY
+from sqlalchemy import select
 
+from app.billing.pricing import compute_cost_microusd
+from app.db import SessionLocal
 from app.llm.base import ProviderError
 from app.llm.fallback import FallbackProvider, primary_only
 from app.llm.openai_compat import PRESETS, OpenAICompatibleProvider
+from app.models import BudgetPeriod, UsageLedger
+from tests.conftest import make_tenant, summarize
 
 PRIMARY, SECONDARY = "gemini-3.8-flash", "gemini-3.5-flash-lite"
 USAGE = {"prompt_tokens": 300, "completion_tokens": 40, "total_tokens": 340}
@@ -219,3 +224,108 @@ def test_fallback_provider_without_a_model_is_a_config_error(env):
     env(LLM_PROVIDER="mock", LLM_FALLBACK_PROVIDER="mock")
     with pytest.raises(ValueError, match="LLM_FALLBACK_MODEL"):
         get_provider()
+
+
+# --- pipeline: reserve, entitlement, settle and book by the answering model -------------------
+
+
+@pytest.fixture
+def spy_reserve(monkeypatch):
+    """Records every estimate the pipeline computes and the amount it reserves."""
+    import app.api.summarize as pipeline
+
+    seen: dict = {"estimates": {}, "reserved": []}
+    real_estimate, real_reserve = pipeline.estimate_cost_microusd, pipeline.budget.reserve
+
+    def estimate(model, *args):
+        seen["estimates"][model] = real_estimate(model, *args)
+        return seen["estimates"][model]
+
+    def reserve(db, tenant, plan, est):
+        seen["reserved"].append(est)
+        return real_reserve(db, tenant, plan, est)
+
+    monkeypatch.setattr(pipeline, "estimate_cost_microusd", estimate)
+    monkeypatch.setattr(pipeline.budget, "reserve", reserve)
+    return seen
+
+
+def _serve(monkeypatch, env, chain, fallback=SECONDARY):
+    """Turn the chain on in settings and make the pipeline use `chain`."""
+    chain.secondary_model = fallback
+    env(LLM_FALLBACK_PROVIDER="gemini", LLM_FALLBACK_MODEL=fallback)
+    monkeypatch.setattr("app.api.summarize.get_provider", lambda: chain)
+
+
+def _ledger_rows() -> list[tuple[str, int]]:
+    with SessionLocal() as db:
+        return [(r.model, r.cost_microusd) for r in db.scalars(select(UsageLedger))]
+
+
+def _budget() -> tuple[int, int]:
+    with SessionLocal() as db:
+        bp = db.scalars(select(BudgetPeriod)).one()
+        return bp.reserved_microusd, bp.spent_microusd
+
+
+def test_fallback_answer_is_billed_at_the_fallback_price(
+    client, api_key, monkeypatch, env, spy_reserve
+):
+    chain, _, s_calls = _chain(lambda r: httpx.Response(429, json={}))
+    _serve(monkeypatch, env, chain)
+    r = summarize(client, api_key)  # pro plan: default gemini-3.8-flash, flash-lite allowed
+    assert r.status_code == 200, r.text
+    usage = r.json()["usage"]
+    assert usage["model"] == SECONDARY and usage["fallback_from"] == PRIMARY
+    assert usage["provider"] == "gemini" and len(s_calls) == 1
+    cost = compute_cost_microusd(SECONDARY, 300, 40)
+    assert usage["cost_usd"] == cost / 1_000_000
+    assert _ledger_rows() == [(SECONDARY, cost)]
+    assert _budget() == (0, cost)  # the reservation is fully released at settle
+    assert set(spy_reserve["estimates"]) == {PRIMARY, SECONDARY}
+
+
+def test_fallback_not_on_the_plan_is_never_called(client, monkeypatch, env, spy_reserve):
+    key = make_tenant(client, plan="free")["api_key"]  # free plan: no gemini-3.1-flash-lite
+    chain, p_calls, s_calls = _chain(lambda r: httpx.Response(429, json={}))
+    _serve(monkeypatch, env, chain, fallback="gemini-3.1-flash-lite")
+    r = summarize(client, key, model=PRIMARY)
+    assert r.status_code == 502 and r.json()["error"]["code"] == "upstream_error"
+    assert len(p_calls) == 1 and s_calls == []
+    assert _ledger_rows() == [] and _budget() == (0, 0)
+    assert set(spy_reserve["estimates"]) == {PRIMARY}  # nothing reserved for a model it can't use
+
+
+def test_reservation_covers_a_pricier_fallback(client, monkeypatch, env, spy_reserve):
+    pricey = "claude-sonnet-5-5"  # enterprise plan only; dearer than gemini-3.8-flash per token
+    key = make_tenant(client, plan="enterprise")["api_key"]
+    chain, _, _ = _chain(lambda r: httpx.Response(503, json={}))
+    _serve(monkeypatch, env, chain, fallback=pricey)
+    r = summarize(client, key, model=PRIMARY)
+    assert r.status_code == 200, r.text
+    est = spy_reserve["estimates"]
+    assert est[pricey] > est[PRIMARY]
+    assert spy_reserve["reserved"] == [est[pricey]]
+    cost = compute_cost_microusd(pricey, 300, 40)
+    assert cost <= est[pricey] and _ledger_rows() == [(pricey, cost)]
+
+
+def test_both_models_failing_returns_502_and_bills_nothing(client, api_key, monkeypatch, env):
+    chain, p_calls, s_calls = _chain(
+        lambda r: httpx.Response(429, json={}), lambda r: httpx.Response(503, json={})
+    )
+    _serve(monkeypatch, env, chain)
+    r = summarize(client, api_key)
+    assert r.status_code == 502 and r.headers["Retry-After"] == "2"
+    assert len(p_calls) == 1 and len(s_calls) == 1
+    assert _ledger_rows() == [] and _budget() == (0, 0)
+
+
+def test_without_fallback_settings_the_pipeline_is_unchanged(client, api_key, spy_reserve):
+    r = summarize(client, api_key)
+    assert r.status_code == 200
+    usage = r.json()["usage"]
+    assert usage["model"] == PRIMARY and usage["fallback_from"] is None
+    assert usage["provider"] == "mock"
+    assert list(spy_reserve["estimates"]) == [PRIMARY]
+    assert spy_reserve["reserved"] == [spy_reserve["estimates"][PRIMARY]]

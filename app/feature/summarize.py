@@ -7,17 +7,20 @@ from dataclasses import dataclass
 from app.feature.fetch import FetchedPage
 from app.feature.prompts import PromptSpec
 from app.llm.base import LLMProvider
+from app.llm.fallback import primary_only
 
 
 @dataclass
 class SummaryResult:
     text: str
-    model: str
+    model: str  # the configured model that answered: the fallback model if the chain was used
     input_tokens: int
     output_tokens: int
     latency_ms: int
     prompt_version: str
     prompt_hash: str
+    provider: str | None = None
+    fallback_from: str | None = None
 
 
 def build_user_prompt(
@@ -45,7 +48,11 @@ def run_summary(
     prompt: PromptSpec,
     user_prompt: str,
     max_tokens: int,
+    allow_fallback: bool = True,
 ) -> SummaryResult:
+    """`allow_fallback=False` calls only the primary (the fallback model is not on the tenant's plan)."""
+    if not allow_fallback:
+        provider = primary_only(provider)
     res = provider.complete(
         model=model, system=prompt.system, user=user_prompt, max_tokens=max_tokens
     )
@@ -57,4 +64,6 @@ def run_summary(
         latency_ms=res.latency_ms,
         prompt_version=prompt.version,
         prompt_hash=prompt.content_hash,
+        provider=res.provider,
+        fallback_from=res.fallback_from,
     )
