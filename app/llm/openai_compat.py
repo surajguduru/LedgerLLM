@@ -94,6 +94,13 @@ class OpenAICompatibleProvider:
             text = choice["message"].get("content") or ""
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise ProviderError(f"{self.name} returned an unexpected body", retryable=True) from exc
+        if choice.get("finish_reason") == "length" and not text.strip():
+            # The whole budget went on hidden reasoning. Refusing here makes the pipeline release
+            # the reservation and return 502 instead of billing the tenant for an empty summary.
+            # Retrying with the same budget would fail the same way, so this is not retryable.
+            raise ProviderError(
+                f"{self.name} exhausted the output budget before producing text", retryable=False
+            )
 
         usage = data.get("usage") or {}
         unreported = _unreported_output_tokens(usage)

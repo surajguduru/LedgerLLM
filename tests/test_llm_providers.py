@@ -4,11 +4,15 @@ import json
 
 import httpx
 import pytest
+from sqlalchemy import func, select
 
 from app.config import get_settings
+from app.db import SessionLocal
 from app.llm import get_provider
 from app.llm.base import ProviderError
 from app.llm.openai_compat import PRESETS, OpenAICompatibleProvider
+from app.models import AuditEvent, BudgetPeriod, UsageLedger
+from tests.conftest import summarize
 
 
 def _provider(handler, name="gemini", **kwargs):
@@ -158,3 +162,40 @@ def test_gemini_hidden_reasoning_is_billed_as_output():
     )
     assert res.reasoning_tokens == 240
     assert res.output_tokens == 246 <= 250  # still within the reserved max_tokens
+
+
+@pytest.mark.parametrize("content", ["", "  \n", None])
+def test_length_stop_with_no_text_is_a_non_retryable_error(content):
+    usage = {"prompt_tokens": 355, "completion_tokens": 0, "total_tokens": 375}
+    p = _provider(lambda r: _ok(content=content, finish_reason="length", usage=usage))
+    with pytest.raises(ProviderError, match="exhausted the output budget") as e:
+        p.complete(model="gemini-3.8-flash", system="s", user="u", max_tokens=20)
+    assert e.value.retryable is False and e.value.code == "upstream_error"
+
+
+def test_length_stop_with_text_returns_the_truncated_text():
+    p = _provider(lambda r: _ok(content="- partial", finish_reason="length"))
+    res = p.complete(model="m", system="s", user="u", max_tokens=20)
+    assert res.text == "- partial" and res.stop_reason == "length"
+
+
+def test_exhausted_budget_returns_502_and_bills_nothing(client, api_key, monkeypatch):
+    empty = _provider(
+        lambda r: _ok(
+            content="",
+            finish_reason="length",
+            usage={"prompt_tokens": 400, "completion_tokens": 0, "total_tokens": 700},
+        )
+    )
+    monkeypatch.setattr("app.api.summarize.get_provider", lambda: empty)
+    r = summarize(client, api_key)
+    assert r.status_code == 502
+    assert r.json()["error"]["code"] == "upstream_error"
+    assert "Retry-After" not in r.headers  # not retryable: same budget, same outcome
+    with SessionLocal() as db:
+        bp = db.scalars(select(BudgetPeriod)).one()
+        assert bp.reserved_microusd == 0 and bp.spent_microusd == 0
+        assert db.scalar(select(func.count()).select_from(UsageLedger)) == 0
+        assert db.scalars(
+            select(AuditEvent).where(AuditEvent.event_type == "request.upstream_error")
+        ).one()
