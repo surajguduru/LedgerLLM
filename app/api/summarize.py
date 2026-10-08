@@ -502,18 +502,31 @@ def _pipeline(
     # 6. input guardrail -----------------------------------------------------------------------
     mode = settings.guardrails_mode
     verdict_in = PASS
+    guardrail_cost = 0
     if mode != "off":
+        # Instructions first, then the document. Each verdict is booked on its own: either may
+        # have consulted the paid classifier, and the one that is reported is the stronger one.
         verdict_in = classify_input(payload.instructions or "", source="instructions")
+        guardrail_cost += _book_guardrail(
+            db,
+            verdict=verdict_in,
+            auth=auth,
+            request_id=request_id,
+            period=decision.period,
+            stage="input",
+        )
         if not verdict_in.blocked:
-            verdict_in = classify_input(page.text, source="document")
-    guardrail_cost = _book_guardrail(
-        db,
-        verdict=verdict_in,
-        auth=auth,
-        request_id=request_id,
-        period=decision.period,
-        stage="input",
-    )
+            verdict_doc = classify_input(page.text, source="document")
+            guardrail_cost += _book_guardrail(
+                db,
+                verdict=verdict_doc,
+                auth=auth,
+                request_id=request_id,
+                period=decision.period,
+                stage="input",
+            )
+            if verdict_doc.score >= verdict_in.score:
+                verdict_in = verdict_doc
     if _run_guardrail(
         db, mode=mode, stage="input", verdict=verdict_in, auth=auth, request_id=request_id
     ):

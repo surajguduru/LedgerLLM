@@ -51,6 +51,10 @@ class Settings(BaseSettings):
 
     # Guardrails: enforce | shadow | off
     guardrails_mode: str = "enforce"
+    # Second detection layer: on | off. Off for tests and load tests; the model must be in prices.yaml.
+    guardrail_llm: str = "off"
+    guardrail_llm_model: str = "gemini-3.5-flash-lite"
+    guardrail_llm_cache_size: int = 4096
 
     # URL fetching
     fetch_timeout_s: float = 10.0

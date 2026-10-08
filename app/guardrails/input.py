@@ -24,10 +24,12 @@ from dataclasses import dataclass
 from time import perf_counter
 
 from app.compliance.redaction import redact
+from app.guardrails import llm_classifier
 from app.guardrails.normalize import normalize
 from app.guardrails.types import GuardrailVerdict
 
 METHOD = "heuristic_v2"
+CASCADE_METHOD = "cascade_v1"  # heuristics + LLM classifier
 
 # Block when the combined score reaches this. Documents get more slack than instructions.
 THRESHOLDS: dict[str, float] = {"instructions": 0.8, "document": 0.9}
@@ -351,17 +353,47 @@ def classify_input(text: str, *, source: str = "instructions") -> GuardrailVerdi
     t0 = perf_counter()
     threshold = THRESHOLDS.get(source, THRESHOLDS["instructions"])
     score, category, signals = heuristic_score(text)
+    details: dict = {
+        "source": source,
+        "threshold": threshold,
+        "heuristic_score": score,
+        "heuristic_category": category,
+        "signals": signals,
+    }
+    method = METHOD
+    model, input_tokens, output_tokens = None, 0, 0
+
+    lo, hi = UNCERTAIN_BAND
+    if lo <= score < hi and llm_classifier.enabled():
+        llm = llm_classifier.classify_with_llm(text, source=source)
+        if llm is not None:
+            method = CASCADE_METHOD
+            details["llm"] = {
+                "injection": llm.injection,
+                "category": llm.category,
+                "confidence": llm.confidence,
+                "latency_ms": llm.latency_ms,
+                "cached": llm.cached,
+            }
+            # The classifier is the better judge inside the band: an "injection" answer lifts the
+            # score to its confidence, a "clean" answer caps it at (1 - confidence).
+            if llm.injection:
+                score = max(score, llm.confidence)
+                category = llm.category
+            else:
+                score = min(score, round(1.0 - llm.confidence, 3))
+            # Cached verdicts cost nothing: no model/tokens, so the pipeline books no ledger row.
+            if not llm.cached:
+                model, input_tokens, output_tokens = llm.model, llm.input_tokens, llm.output_tokens
+
     return GuardrailVerdict(
         blocked=score >= threshold,
         category=category if score >= threshold else None,
         score=score,
-        method=METHOD,
+        method=method,
         latency_ms=int((perf_counter() - t0) * 1000),
-        details={
-            "source": source,
-            "threshold": threshold,
-            "heuristic_score": score,
-            "heuristic_category": category,
-            "signals": signals,
-        },
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        details=details,
     )
