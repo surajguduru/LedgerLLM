@@ -85,6 +85,33 @@ def test_non_public_addresses_are_blocked(host):
         validate_url(f"http://{host}/")
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "[64:ff9b::7f00:1]",  # NAT64 well-known prefix -> 127.0.0.1
+        "[64:ff9b::a9fe:a9fe]",  # NAT64 -> 169.254.169.254 (metadata)
+        "[64:ff9b:1::a00:1]",  # NAT64 local-use prefix -> 10.0.0.1
+        "[::127.0.0.1]",  # deprecated IPv4-compatible loopback
+        "[2002:7f00:1::]",  # 6to4 wrapping 127.0.0.1
+        "[2001:0:4136:e378:8000:63bf:80ff:fffe]",  # Teredo, client 127.0.0.1
+    ],
+)
+def test_ipv4_embedded_in_ipv6_is_checked(host):
+    # ipaddress reports the first two as is_global; the embedded IPv4 address is what they reach.
+    with pytest.raises(FetchBlocked):
+        validate_url(f"http://{host}/")
+
+
+def test_nat64_to_a_public_address_is_allowed():
+    assert validate_url("http://[64:ff9b::808:808]/")
+
+
+def test_name_resolving_to_nat64_loopback_is_blocked(dns):
+    dns["sneaky.example"] = ["64:ff9b::7f00:1"]
+    with pytest.raises(FetchBlocked):
+        validate_url("http://sneaky.example/")
+
+
 @pytest.mark.parametrize("host", ["2130706433", "0x7f.0.0.1", "127.1", "017700000001"])
 def test_numeric_loopback_spellings_are_blocked(host):
     with pytest.raises(FetchBlocked):

@@ -81,9 +81,35 @@ class FetchedPage:
     fetched_ms: int
 
 
+# IPv6 prefixes that carry an IPv4 address in their last 32 bits. `ipaddress` reports several of these as
+# global (64:ff9b::7f00:1 is NAT64 for 127.0.0.1; ::127.0.0.1 is IPv4-compatible loopback), so the
+# embedded address must be checked too — on a host with a NAT64 gateway they reach the IPv4 target.
+_NAT64_PREFIXES = (
+    ipaddress.IPv6Network("64:ff9b::/96"),  # RFC 6052 well-known prefix
+    ipaddress.IPv6Network("64:ff9b:1::/48"),  # RFC 8215 local-use prefix
+)
+_IPV4_COMPATIBLE = ipaddress.IPv6Network("::/96")  # deprecated ::a.b.c.d form
+
+
+def _embedded_ipv4(ip: ipaddress.IPv6Address) -> list[ipaddress.IPv4Address]:
+    out: list[ipaddress.IPv4Address] = []
+    if ip.ipv4_mapped is not None:
+        out.append(ip.ipv4_mapped)
+    if any(ip in net for net in _NAT64_PREFIXES) or (
+        ip in _IPV4_COMPATIBLE and int(ip) > 1  # not :: or ::1, which is_global already refuses
+    ):
+        out.append(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+    if ip.sixtofour is not None:
+        out.append(ip.sixtofour)
+    if ip.teredo is not None:
+        out.extend(ip.teredo)  # (server, client)
+    return out
+
+
 def _is_forbidden(ip: IPAddress) -> bool:
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv6Address):
+        if any(_is_forbidden(v4) for v4 in _embedded_ipv4(ip)):
+            return True
     return ip == METADATA_ADDRESS or ip.is_multicast or not ip.is_global
 
 

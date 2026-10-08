@@ -384,6 +384,12 @@ def compute_means(rows: list[dict]) -> dict:
     done = [r for r in rows if "hit_rate" in r]
     judged = [r["judge"] for r in rows if "judge" in r]
     scored = [j for j in judged if "judge_error" not in j]
+    # A judge that could not be reached (rate limit or outage after the back-off, or no summary because
+    # the summarizer itself was unreachable) says nothing about the prompt. Only a judge that answered
+    # badly counts toward the error rate; unavailability is reported, and gated, separately.
+    unavailable = [j for j in judged if _is_unavailable(j)]
+    answered = len(judged) - len(unavailable)
+    real_errors = answered - len(scored)
     return {
         "key_point_hit_rate": _mean([r["hit_rate"] for r in done]),
         "length_ratio_max": round(max(r["length_ratio"] for r in done), 3) if done else None,
@@ -396,9 +402,33 @@ def compute_means(rows: list[dict]) -> dict:
         ),
         "faithfulness": _mean([j["faithfulness"] for j in scored]),
         "coverage": _mean([j["coverage"] for j in scored]),
-        "judge_errors": len(judged) - len(scored),
-        "judge_error_rate": round((len(judged) - len(scored)) / len(judged), 3) if judged else None,
+        "judge_errors": real_errors,
+        "judge_error_rate": round(real_errors / answered, 3) if answered else None,
+        "judge_unavailable": len(unavailable),
+        "judge_unavailable_rate": round(len(unavailable) / len(judged), 3) if judged else None,
     }
+
+
+def _is_unavailable(judgement: dict) -> bool:
+    err = judgement.get("judge_error", "")
+    return err.startswith("provider:") or err == "no summary to judge"
+
+
+def judge_inconclusive(means: dict, th: dict) -> str | None:
+    """Why the judge half of the model gate cannot be decided, or None when it can.
+
+    The free judge tier rate-limits CI (PR #24: 6 of 8 calls refused, with no prompt change). Failing
+    the PR for that blocks unrelated work; passing it silently hides that nothing was judged. So the
+    run is INCONCLUSIVE: the deterministic checks still gate, scores that did come back are still
+    checked, and CI prints a warning.
+    """
+    rate = means.get("judge_unavailable_rate")
+    if rate is not None and rate > th.get("max_judge_unavailable_rate", 1.0):
+        return (
+            f"judge unavailable for {means['judge_unavailable']} case(s) "
+            f"(rate {rate} > {th['max_judge_unavailable_rate']}): provider rate limit or outage"
+        )
+    return None
 
 
 def check_gate(means: dict, th: dict, *, section: str) -> list[str]:
@@ -432,12 +462,15 @@ def check_gate(means: dict, th: dict, *, section: str) -> list[str]:
         len(means["leaked_cases"]) <= th["max_leaked_cases"],
         f"leaks in {means['leaked_cases']}",
     )
+    inconclusive = judge_inconclusive(means, th)
     if means["faithfulness"] is None:
-        return [*fails, "the judge scored no case"]
-    need(
-        means["judge_error_rate"] <= th["max_judge_error_rate"],
-        f"judge error rate {means['judge_error_rate']} > {th['max_judge_error_rate']}",
-    )
+        return fails if inconclusive else [*fails, "the judge scored no case"]
+    if not inconclusive:
+        need(
+            means["judge_error_rate"] is not None
+            and means["judge_error_rate"] <= th["max_judge_error_rate"],
+            f"judge error rate {means['judge_error_rate']} > {th['max_judge_error_rate']}",
+        )
     need(
         means["faithfulness"] >= th["min_faithfulness"],
         f"faithfulness {means['faithfulness']} < {th['min_faithfulness']}",
@@ -682,7 +715,13 @@ def main() -> int:
     out.write_text(json.dumps(report, indent=2) + "\n")
     print(f"  wrote {out}")
     if args.gate:
-        print(f"gate ({section}): {'FAIL: ' + '; '.join(failures) if failures else 'PASS'}")
+        reason = judge_inconclusive(report["meta"]["means"], th[section]) if use_judge else None
+        verdict = "FAIL: " + "; ".join(failures) if failures else "PASS"
+        if reason:
+            verdict += f" (judge INCONCLUSIVE: {reason})"
+            # GitHub Actions annotation: visible on the PR without failing it.
+            print(f"::warning title=Summarization judge inconclusive::{reason}")
+        print(f"gate ({section}): {verdict}")
         return 1 if failures else 0
     return 0
 
