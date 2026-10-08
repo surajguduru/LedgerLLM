@@ -144,3 +144,78 @@ def test_primary_only_unwraps_the_chain():
     chain, _, _ = _chain(lambda r: _ok())
     assert primary_only(chain) is chain.primary
     assert primary_only(chain.primary) is chain.primary
+
+
+# --- configuration (LLM_FALLBACK_*) -------------------------------------------------------------
+
+
+@pytest.fixture
+def env(monkeypatch):
+    """Set env vars for get_provider(); caches are cleared before and after."""
+    from app.config import get_settings
+    from app.llm import get_provider
+
+    def apply(**values):
+        for k, v in values.items():
+            monkeypatch.setenv(k, v)
+        get_settings.cache_clear()
+        get_provider.cache_clear()
+
+    yield apply
+    monkeypatch.undo()
+    get_settings.cache_clear()
+    get_provider.cache_clear()
+
+
+def test_fallback_is_off_by_default(env):
+    from app.llm import fallback_model, get_provider
+
+    env(LLM_PROVIDER="gemini", LLM_API_KEY="k")
+    assert fallback_model() is None
+    assert isinstance(get_provider(), OpenAICompatibleProvider)
+
+
+def test_same_provider_fallback_reuses_the_primary_key(env):
+    from app.llm import fallback_model, get_provider
+
+    env(
+        LLM_PROVIDER="gemini",
+        LLM_API_KEY="k",
+        LLM_TIMEOUT_S="0.5",
+        LLM_FALLBACK_PROVIDER="gemini",
+        LLM_FALLBACK_MODEL=SECONDARY,
+        LLM_FALLBACK_TIMEOUT_S="20",
+    )
+    chain = get_provider()
+    assert isinstance(chain, FallbackProvider) and fallback_model() == SECONDARY
+    assert chain.secondary._headers["Authorization"] == "Bearer k"
+    assert chain.primary._client.timeout.read == 0.5
+    assert chain.secondary._client.timeout.read == 20
+
+
+def test_other_provider_fallback_needs_its_own_key(env):
+    from app.llm import get_provider
+
+    env(
+        LLM_PROVIDER="gemini",
+        LLM_API_KEY="k",
+        LLM_REASONING_EFFORT="medium",
+        LLM_FALLBACK_PROVIDER="groq",
+        LLM_FALLBACK_MODEL="llama-3.1-8b-instant",
+    )
+    with pytest.raises(ValueError, match="LLM_FALLBACK_API_KEY"):
+        get_provider()
+    env(LLM_FALLBACK_API_KEY="g")
+    chain = get_provider()
+    assert chain.secondary.name == "groq"
+    assert chain.secondary._headers["Authorization"] == "Bearer g"
+    assert chain.secondary.reasoning_effort is None  # the Gemini override is not sent to Groq
+    assert chain.primary.reasoning_effort == "medium"
+
+
+def test_fallback_provider_without_a_model_is_a_config_error(env):
+    from app.llm import get_provider
+
+    env(LLM_PROVIDER="mock", LLM_FALLBACK_PROVIDER="mock")
+    with pytest.raises(ValueError, match="LLM_FALLBACK_MODEL"):
+        get_provider()
