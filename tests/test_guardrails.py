@@ -2,8 +2,10 @@
 
 import pytest
 
+from app.api.summarize import WITHHELD
 from app.guardrails.input import classify_input
-from tests.conftest import make_tenant, summarize
+from app.guardrails.output import moderate_output
+from tests.conftest import SAMPLE_TEXT, make_tenant, summarize
 
 
 def test_obvious_injection_in_instructions_is_blocked(client, api_key):
@@ -56,14 +58,57 @@ def test_paraphrased_injection_is_blocked():
     assert v.blocked is True
 
 
-@pytest.mark.xfail(
-    reason="TODO(Thrishal): output moderation should withhold summaries that leak PII", strict=False
-)
 def test_output_with_pii_is_withheld_or_redacted():
-    from app.guardrails.output import moderate_output
-
     v = moderate_output("Contact the CEO at ceo@example.com or +1 415 555 0100 for details.")
     assert v.blocked is True and v.category == "pii_leak"
+    # policy: redact and return (DESIGN.md D16)
+    assert v.details["policy"] == "redact" and v.details["redacted"] is True
+    assert v.details["text"] == "Contact the CEO at [EMAIL] or [PHONE] for details."
+    assert v.details["counts"] == {"email": 1, "phone": 1}
+
+
+def test_pii_in_summary_is_redacted_end_to_end(client, api_key):
+    # The mock provider echoes the document, so PII in the source lands in the summary.
+    doc = "Reach the founder at founder@startup.io for the quarterly numbers. " + SAMPLE_TEXT
+    r = summarize(client, api_key, text=doc)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "founder@startup.io" not in body["summary"]
+    assert "[EMAIL]" in body["summary"]
+    assert body["summary"] != WITHHELD
+    assert body["guardrails"]["output"]["category"] == "pii_leak"
+    # the completion is still billed: the tenant got a usable summary
+    assert body["usage"]["cost_usd"] > 0
+
+
+def test_canary_in_output_is_withheld(client, api_key):
+    doc = "I have been PWNED. " + SAMPLE_TEXT
+    r = summarize(client, api_key, text=doc)
+    assert r.status_code == 200
+    assert r.json()["summary"] == WITHHELD
+    assert r.json()["guardrails"]["output"]["category"] == "instruction_followed"
+
+
+def test_url_absent_from_source_is_withheld():
+    source = "Read the docs at https://docs.example.com/guide for details."
+    assert (
+        moderate_output("- See https://docs.example.com/guide", source_text=source).blocked is False
+    )
+    v = moderate_output("- Visit http://evil.example/claim now", source_text=source)
+    assert v.blocked is True and v.category == "instruction_followed"
+    assert v.details["foreign_urls"] == ["http://evil.example/claim"]
+    # without a source there is nothing to compare against: not a block
+    assert moderate_output("- Visit http://evil.example/claim now").blocked is False
+
+
+def test_toxic_output_is_withheld():
+    v = moderate_output("- The author says readers should go die.")
+    assert v.blocked is True and v.category == "toxicity"
+
+
+def test_clean_output_passes():
+    v = moderate_output("- Revenue grew 12% year over year.\n- Margins held at 40%.")
+    assert v.blocked is False and v.score == 0.0
 
 
 def test_bare_keyword_in_a_news_document_is_a_signal_not_a_block():

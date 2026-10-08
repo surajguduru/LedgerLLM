@@ -601,7 +601,7 @@ def _pipeline(
     prompt_version = f"{prompt.version}@{prompt.content_hash}"
 
     # 8. output guardrail ----------------------------------------------------------------------
-    verdict_out = moderate_output(result.text) if mode != "off" else PASS
+    verdict_out = moderate_output(result.text, source_text=page.text) if mode != "off" else PASS
     guardrail_cost += _book_guardrail(
         db,
         verdict=verdict_out,
@@ -613,8 +613,10 @@ def _pipeline(
     withheld = _run_guardrail(
         db, mode=mode, stage="output", verdict=verdict_out, auth=auth, request_id=request_id
     )
-    summary_text = WITHHELD if withheld else result.text
+    summary_text = result.text
     if withheld:
+        # A verdict that supplies a redacted copy (pii_leak) is served instead of the placeholder.
+        summary_text = verdict_out.details.get("text") or WITHHELD
         audit(
             db,
             audit_events.OUTPUT_MODERATED,
