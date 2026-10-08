@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     llm_timeout_s: float = 30.0
     # reasoning_effort for OpenAI-compatible providers. None: preset default (Gemini "low"); "": don't send.
     llm_reasoning_effort: str | None = None
+    # Fallback chain (D19): on a retryable error, call this provider/model once. Empty provider = off.
+    llm_fallback_provider: str = ""  # same names as llm_provider, e.g. gemini or groq
+    llm_fallback_model: str = ""  # must have a row in prices.yaml, e.g. gemini-3.5-flash-lite
+    llm_fallback_api_key: str | None = None  # empty: reuse llm_api_key if the provider is the same
+    llm_fallback_base_url: str | None = None
+    llm_fallback_timeout_s: float | None = None  # empty: llm_timeout_s
 
     # Admin
     admin_token: str = "dev-admin-token-change-me"

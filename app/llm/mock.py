@@ -44,4 +44,5 @@ class MockProvider:
             output_tokens=estimate_tokens(text),
             latency_ms=self.latency_ms,
             stop_reason="end_turn",
+            provider=self.name,
         )

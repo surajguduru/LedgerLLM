@@ -40,9 +40,10 @@ class AnthropicProvider:
         text = "".join(block.text for block in msg.content if block.type == "text")
         return LLMResult(
             text=text,
-            model=msg.model,
+            model=model,  # msg.model may be a dated snapshot name with no row in prices.yaml
             input_tokens=msg.usage.input_tokens,
             output_tokens=msg.usage.output_tokens,
             latency_ms=latency_ms,
             stop_reason=msg.stop_reason,
+            provider=self.name,
         )

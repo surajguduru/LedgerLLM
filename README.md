@@ -52,6 +52,12 @@ Each plan routes to its own default model when a request names none (free → `g
 enterprise → `gemini-3.8-flash`); `default_model` and `allowed_models` per plan are in `config/plans.yaml`, and
 `DEFAULT_MODEL` is the fallback for plans without one.
 
+Provider fallback (D19): set `LLM_FALLBACK_PROVIDER=gemini` and `LLM_FALLBACK_MODEL=gemini-3.5-flash-lite` and a
+429, 5xx or timeout on the primary model is retried once on the fallback model (Gemini free-tier quotas are per
+model, so the same key works). The tenant is billed for the model that answered, at its list price, and only if
+that model is on their plan; `usage.fallback_from` says when it happened. A different vendor works too, e.g.
+`LLM_FALLBACK_PROVIDER=groq`, `LLM_FALLBACK_MODEL=llama-3.1-8b-instant`, `LLM_FALLBACK_API_KEY=gsk_...`.
+
 <details>
 <summary>Without <code>make</code> (Windows PowerShell)</summary>
 

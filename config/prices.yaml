@@ -2,7 +2,9 @@
 # Units: USD per 1M tokens (list prices, paid tier). We bill tenants at list price even when the platform itself
 # runs on a provider's free tier — that difference is the platform's margin, and it keeps bills stable if we move tiers.
 # cost_microusd = input_tokens * input_usd_per_mtok + output_tokens * output_usd_per_mtok  (exact integer arithmetic)
-version: "2026-10-04"
+# A version names exactly one table: any change, a new model included, gets a new version, so every
+# price_version in the ledger resolves to the single file content (in version control) that priced it.
+version: "2026-10-08"
 models:
   mock:                   { input_usd_per_mtok: 0.75, output_usd_per_mtok: 3.75 }   # priced like gemini-3.8-flash so load tests book realistic $
   gemini-3.8-flash:       { input_usd_per_mtok: 0.75, output_usd_per_mtok: 3.75 }
@@ -11,3 +13,4 @@ models:
   claude-haiku-4-5:       { input_usd_per_mtok: 1.00, output_usd_per_mtok: 5.00 }
   claude-sonnet-5-5:      { input_usd_per_mtok: 2.00, output_usd_per_mtok: 10.00 }
   claude-opus-5-5:        { input_usd_per_mtok: 4.00, output_usd_per_mtok: 20.00 }
+  llama-3.1-8b-instant:   { input_usd_per_mtok: 0.05, output_usd_per_mtok: 0.08 }   # Groq, fallback example (D19) # unverified: last known public price; groq.com showed no table on 8 Oct
