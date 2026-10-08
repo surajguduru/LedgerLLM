@@ -19,6 +19,7 @@ from app.db import get_db
 from app.errors import ApiError
 from app.models import ApiKey, Tenant
 from app.plans import load_plans, microusd_to_usd, usd_to_microusd
+from app.quality.stats import quality_report
 from app.schemas import (
     ApiKeyOut,
     CreateKeyRequest,
@@ -107,6 +108,12 @@ def create_tenant(
     )
     db.commit()
     return CreateTenantResponse(tenant=_tenant_out(tenant), key=_key_out(key), api_key=raw)
+
+
+@router.get("/quality")
+def quality(days: int = 7, recent: int = 20, db: Session = Depends(get_db)) -> dict:
+    """Online quality sampling: judge means per prompt version, judge cost, recent samples (owner: Thrishal)."""
+    return quality_report(db, days=max(1, min(days, 90)), recent=max(1, min(recent, 200)))
 
 
 @router.post("/tenants/{tenant_id}/keys", response_model=CreateKeyResponse, status_code=201)

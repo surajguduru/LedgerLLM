@@ -15,7 +15,7 @@ from app.db import SessionLocal
 from app.llm.base import LLMResult, ProviderError
 from app.models import QualitySample, UsageLedger
 from app.quality import online_judge
-from tests.conftest import summarize
+from tests.conftest import ADMIN, summarize
 
 PV = "summarize_v1@deadbeef"
 
@@ -186,3 +186,24 @@ class _Inline:
         f = Future()
         f.set_result(None)
         return f
+
+
+def test_admin_quality_report(client, stub):
+    stub()
+    for i in range(3):
+        online_judge.maybe_sample(**_args(i))
+    online_judge.maybe_sample(**_args(9, prompt_version="summarize_v2@cafe0000"))
+    online_judge.drain()
+    r = client.get("/admin/quality", headers=ADMIN)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    by = {v["prompt_version"]: v for v in body["by_prompt_version"]}
+    assert (
+        by[PV]["samples"] == 3
+        and by[PV]["faithfulness_mean"] == 4.0
+        and by[PV]["coverage_mean"] == 3.0
+    )
+    assert by["summarize_v2@cafe0000"]["samples"] == 1
+    assert body["judge"]["calls"] == 4 and body["judge"]["cost_usd"] > 0
+    assert len(body["recent"]) == 4 and body["recent"][0]["request_id"] == "req-9"
+    assert client.get("/admin/quality").status_code == 401
