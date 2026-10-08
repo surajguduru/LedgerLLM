@@ -177,30 +177,68 @@ def summarize(
     request_id: str = request.state.request_id
     t0 = perf_counter()
     elapsed = lambda: int((perf_counter() - t0) * 1000)  # noqa: E731
+
+    # 2. idempotency replay / claim ------------------------------------------------------------
+    request_hash = idempotency.hash_request(payload)
+    if not idempotency_key:
+        return _pipeline(payload, request_id, response, db, auth, settings, None, request_hash, t0)
+    existing = idempotency.lookup(db, auth.tenant.id, idempotency_key)
+    if existing is not None and existing.request_hash != request_hash:
+        raise _fail(
+            db,
+            status=409,
+            code="idempotency_conflict",
+            message="Idempotency-Key was already used with a different request body",
+            request_id=request_id,
+            auth=auth,
+            latency_ms=elapsed(),
+            audit_type=audit_events.IDEMPOTENCY_CONFLICT,
+        )
+    if existing is not None and not idempotency.is_pending(existing):
+        return JSONResponse(
+            status_code=existing.status_code,
+            content=json.loads(existing.response_json),
+            headers={"Idempotent-Replayed": "true", "X-Request-ID": request_id},
+        )
+    if existing is not None or not idempotency.claim(
+        db, tenant_id=auth.tenant.id, key=idempotency_key, request_hash=request_hash
+    ):
+        raise _fail(
+            db,
+            status=409,
+            code="idempotency_in_progress",
+            message="a request with this Idempotency-Key is still being processed; retry shortly",
+            request_id=request_id,
+            auth=auth,
+            latency_ms=elapsed(),
+            audit_type=None,
+            headers={"Retry-After": "1"},
+        )
+    try:
+        return _pipeline(
+            payload, request_id, response, db, auth, settings, idempotency_key, request_hash, t0
+        )
+    except BaseException:
+        db.rollback()
+        idempotency.release(db, auth.tenant.id, idempotency_key)
+        raise
+
+
+def _pipeline(
+    payload: SummarizeRequest,
+    request_id: str,
+    response: Response,
+    db: Session,
+    auth: AuthContext,
+    settings: Settings,
+    idempotency_key: str | None,
+    request_hash: str,
+    t0: float,
+):
+    """Stages 3-10. Runs at most once per idempotency key at a time (see `summarize`)."""
+    elapsed = lambda: int((perf_counter() - t0) * 1000)  # noqa: E731
     tenant, key, plan = auth.tenant, auth.api_key, auth.plan
     raw_for_log = payload.text or str(payload.url)
-
-    # 2. idempotency replay --------------------------------------------------------------------
-    request_hash = idempotency.hash_request(payload)
-    if idempotency_key:
-        existing = idempotency.lookup(db, tenant.id, idempotency_key)
-        if existing is not None:
-            if existing.request_hash != request_hash:
-                raise _fail(
-                    db,
-                    status=409,
-                    code="idempotency_conflict",
-                    message="Idempotency-Key was already used with a different request body",
-                    request_id=request_id,
-                    auth=auth,
-                    latency_ms=elapsed(),
-                    audit_type=audit_events.IDEMPOTENCY_CONFLICT,
-                )
-            return JSONResponse(
-                status_code=existing.status_code,
-                content=json.loads(existing.response_json),
-                headers={"Idempotent-Replayed": "true", "X-Request-ID": request_id},
-            )
 
     # 3. rate limit ----------------------------------------------------------------------------
     rl = check_rate_limit(db, key.id, plan)
