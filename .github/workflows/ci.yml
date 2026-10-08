@@ -1,16 +1,25 @@
 name: ci
 
+# PRs are tested on GitHub's merge of the branch into main, so re-running the same suite when that PR merges
+# adds nothing: push runs skip "Merge pull request" commits and still test direct pushes to main.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# A new push to a PR cancels that PR's run still in progress.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   lint-and-test:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Merge pull request')
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12", cache: pip }
       - run: pip install -e ".[dev]"
       - run: ruff check .
@@ -18,7 +27,8 @@ jobs:
       - run: pytest -q
 
   test-postgres:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Merge pull request')
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16-alpine
@@ -29,18 +39,19 @@ jobs:
     env:
       DATABASE_URL: postgresql+psycopg://ledger:ledger@localhost:5432/ledger
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12", cache: pip }
       - run: pip install -e ".[dev]"
       - run: pytest -q
 
   # Eval gate 1: red-team set vs the input guardrail. Free (no LLM calls in heuristic mode). Fails the PR on regression.
   eval-redteam:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Merge pull request')
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12", cache: pip }
       - run: pip install -e ".[dev]"
       - run: python -m evals.redteam.run --gate
@@ -50,11 +61,12 @@ jobs:
   # secret; it only runs on PRs that touch prompts/, the feature code or the eval, and only on the 8-case
   # CI subset (~4 min under Groq's 8,000 tokens/min). The full 30 cases are run locally and committed.
   eval-summarization:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Merge pull request')
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }  # full history so the change detection below has a merge base
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12", cache: pip }
       - run: pip install -e ".[dev]"
       - run: python -m evals.summarization.run --provider mock --gate
