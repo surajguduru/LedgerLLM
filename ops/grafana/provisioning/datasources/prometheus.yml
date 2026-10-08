@@ -5,5 +5,6 @@ datasources:
     uid: prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    # compose default; the deployed image drops this file unless PROMETHEUS_URL is set
+    url: ${PROMETHEUS_URL:-http://prometheus:9090}
     isDefault: true

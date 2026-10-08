@@ -38,6 +38,13 @@ services:
     environment:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_AUTH_ANONYMOUS_ENABLED: "true"
+      # Admin dashboard datasource (ops/grafana/provisioning/datasources/neon.yml). Point these at
+      # the Neon READ REPLICA endpoint, never the read-write one. Unset: the Prometheus dashboard
+      # still works and the admin one shows a datasource error.
+      GRAFANA_DB_HOST: ${GRAFANA_DB_HOST:-}
+      GRAFANA_DB_USER: ${GRAFANA_DB_USER:-}
+      GRAFANA_DB_NAME: ${GRAFANA_DB_NAME:-neondb}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:-}
     volumes:
       - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro

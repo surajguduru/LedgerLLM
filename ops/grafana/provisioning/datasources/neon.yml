@@ -1,0 +1,26 @@
+# Admin dashboard datasource: the production Neon database, read-only.
+#
+# This is deliberately a Neon READ REPLICA endpoint (type=read_only), not the read-write one. Writes
+# fail with "cannot execute INSERT in a read-only transaction" at the transaction level, so safety
+# does not depend on getting GRANTs right. That matters here: Neon grants `neon_superuser` to every
+# role it creates, and the API cannot REVOKE it or set NOINHERIT, so a role-only approach cannot
+# produce a genuinely read-only credential on this plan.
+#
+# The password comes from the environment, never from this file. Set GRAFANA_DB_PASSWORD (and
+# GRAFANA_DB_HOST / _USER / _NAME if they change) in .env before `make up`.
+apiVersion: 1
+datasources:
+  - name: Neon
+    uid: neon
+    type: postgres
+    access: proxy
+    url: ${GRAFANA_DB_HOST}
+    user: ${GRAFANA_DB_USER}
+    database: ${GRAFANA_DB_NAME}
+    secureJsonData:
+      password: ${GRAFANA_DB_PASSWORD}
+    jsonData:
+      sslmode: require
+      postgresVersion: 1800
+      timescaledb: false
+    editable: false
