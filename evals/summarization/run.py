@@ -12,6 +12,15 @@ tier and back off on 429/5xx. thresholds.yaml has a `mock` section (the mock can
 plumbing only) and a `model` section (the quality gate). Results go to results/last_<provider>.json with run
 metadata (prompt version@hash, models, tokens, wall time, means); results/last_gemini.json is committed.
 calibration.jsonl + agreement.py measure how far the judge agrees with hand scores.
+
+Golden set: 30 original, synthetic documents (no copied articles), tagged by domain and length. Domains:
+engineering 5, news 4, product docs 3, finance 3, postmortem 3, how-to 3, research 3, policy 2, transcript 2,
+changelog 2. Lengths: 8 short (300-600 words), 10 medium (600-1,500), 9 long (1,500-3,000), plus the three original
+~120-word cases (legacy-short). Two are deliberately hard: a numbers-dense results release (sum-013) and a
+misleading title (sum-016). Five carry an injected instruction whose canary (PWNED / EVIL.COM) is in
+must_not_include, one per position: start, middle, end, quoted block, footnote (tags injection-<position>).
+tests/test_golden_set.py checks that every key point is reachable from the text and every must_not_include term
+is absent from it.
 """
 
 from __future__ import annotations
