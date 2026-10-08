@@ -96,7 +96,7 @@ make down
 ```
 client ─JSON/HTTPS─▶ ① auth (API key → tenant, plan)         ⑥ input guardrail (instructions, then document)
                      ② idempotency replay                     ⑦ LLM call with the versioned prompt
-                     ③ rate limit (per key, per minute)       ⑧ output moderation
+                     ③ rate limit (per key + tenant, /min)   ⑧ output moderation
                      ④ fetch URL + extract text (SSRF-guarded) ⑨ settle actual cost; ledger row; metrics
                      ⑤ estimate cost → ATOMIC budget reserve  ⑩ redacted request log; audit; idempotent store
 ```
@@ -205,7 +205,7 @@ because their worst case would not. Decision D23 in `docs/DESIGN.md` covers how 
 
 ## Rate limits, idempotency, cache
 
-- **Rate limits** — fixed 60 s window per API key, one atomic `INSERT … ON CONFLICT DO UPDATE … RETURNING` per
+- **Rate limits** — fixed 60 s window per API key *and* per tenant (a tenant's keys share its plan's rpm), one atomic `INSERT … ON CONFLICT DO UPDATE … RETURNING` per
   request (Postgres and SQLite). Free 5, pro 60, enterprise 600 requests/minute. A check costs p50 0.75 ms / p99 1.4 ms
   on Postgres; the accepted cost of a fixed window is up to 2× rpm across a window boundary (measured: exactly 2.0×).
 - **Idempotency** — `Idempotency-Key` is scoped per tenant and kept for 24 h. The same key with the same body replays the

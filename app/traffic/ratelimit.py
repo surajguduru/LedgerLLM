@@ -2,7 +2,7 @@
 
 OWNER: Suraj.
 Contract (do not change signatures without a PR comment to Suraj):
-    check_rate_limit(db, key_id, plan) -> RateLimitResult
+    check_rate_limit(db, key_id, plan, *, tenant_id=None) -> RateLimitResult
     hit(db, bucket, limit) -> RateLimitResult   (any per-minute bucket, e.g. portal login attempts)
 
 Fixed 60 s window per key (docs/DESIGN.md D3): one atomic
@@ -14,6 +14,7 @@ PRUNE_AFTER_SECONDS are deleted opportunistically on about 1 % of calls, so no c
 
 from __future__ import annotations
 
+import hashlib
 import random
 import time
 from dataclasses import dataclass
@@ -70,8 +71,26 @@ def prune_windows(db: Session, now: int) -> int:
     return result.rowcount or 0
 
 
-def check_rate_limit(db: Session, key_id: str, plan: Plan) -> RateLimitResult:
-    return hit(db, key_id, plan.rpm)
+def tenant_bucket(tenant_id: str) -> str:
+    # rate_limit_windows.key_id is 36 chars, a tenant UUID is 36: hash it under a prefix that no key
+    # UUID can have, so tenant and key windows never collide.
+    return "t:" + hashlib.sha256(tenant_id.encode()).hexdigest()[:34]
+
+
+def check_rate_limit(
+    db: Session, key_id: str, plan: Plan, *, tenant_id: str | None = None
+) -> RateLimitResult:
+    """Per key, and with `tenant_id` also per tenant: the plan's rpm is the tenant's, so a tenant
+    with N keys (the portal lets tenants mint their own) cannot get N x rpm. Returns the binding one."""
+    per_key = hit(db, key_id, plan.rpm)
+    if tenant_id is None:
+        return per_key
+    per_tenant = hit(db, tenant_bucket(tenant_id), plan.rpm)
+    if not per_key.allowed:
+        return per_key
+    if not per_tenant.allowed:
+        return per_tenant
+    return per_key if per_key.remaining <= per_tenant.remaining else per_tenant
 
 
 def hit(db: Session, bucket: str, limit: int) -> RateLimitResult:
