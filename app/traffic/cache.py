@@ -1,8 +1,8 @@
 """Exact-match response cache per tenant.
 
-OWNER: Suraj. Stage 4½ of the pipeline, after content is acquired and before the budget reserve, so a hit
+Stage 4½ of the pipeline, after content is acquired and before the budget reserve, so a hit
 never touches the budget and costs no model call. The key covers tenant, model, prompt content hash, style,
-max_words, instructions and the extracted text: a changed page, a new prompt version or a different model is
+max_words, instructions, the page title and the extracted text: a changed page, a new prompt version or a different model is
 a miss by construction, and entries are never shared across tenants.
 
 Billing policy (docs/DESIGN.md D16): a hit is free to the tenant. It is still booked as a ledger row with
@@ -46,6 +46,7 @@ def cache_key(
     instructions: str | None,
     text: str,
     guardrail_version: str = "",
+    title: str = "",
 ) -> str:
     """`guardrail_version` (rules hash + mode) is part of the key: a hit skips the guardrails, so an
     entry cached before a rule change or under GUARDRAILS_MODE=off must not be served afterwards."""
@@ -59,6 +60,7 @@ def cache_key(
             instructions or "",
             text,
             guardrail_version,
+            title,
         ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

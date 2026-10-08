@@ -243,14 +243,21 @@ SIGNALS: list[Signal] = [
     ),
     # --- rewordings: the held-out set (evals/redteam/heldout.jsonl) showed the forms above are
     # too literal. These match the *shape* of an override rather than its canonical wording.
+    # They must name the model's own instructions or the conversation, never a document region:
+    # "ignore everything above the fold" and "forget everything before 2020" are editing requests.
     _s(
         "override_reworded",
         "prompt_injection",
         0.85,
         r"\b(ignore|disregard|forget|set\s+aside|discard|drop|abandon|throw\s+away|scrap)\s+"
-        r"(everything|anything|all|whatever|what(ever)?\s+you\s+(were|have\s+been|'ve\s+been)\s+(told|given|instructed|taught)|"
-        r"the\s+(guidance|rules?|instructions?|text|message|setup)\s*(you\s+)?(received|got|were\s+given|have)?)\s*"
-        r"(above|earlier|before|previously|so\s+far|up\s+to\s+now|prior\s+to\s+this|before\s+this\s+(message|line|point)|until\s+now)",
+        # what the model was told / given: any position word after it is about the conversation
+        r"((what(ever)?\s+you\s+(were|have\s+been|'ve\s+been)\s+(told|given|instructed|taught)|"
+        r"the\s+(guidance|rules?|instructions?|setup)\s*(you\s+)?(received|got|were\s+given|have)?)\s*"
+        r"(above|earlier|before|previously|so\s+far|up\s+to\s+now|prior\s+to\s+this|until\s+now)"
+        # a bare "everything above" only when nothing follows that would make it a document region
+        r"|(everything|anything|all|whatever|the\s+(text|message))\s+"
+        r"((above|earlier|before|previously)(?=\s*([.,;:!?)\-—]|$|(and|then|now)\b))|so\s+far|up\s+to\s+now|until\s+now|"
+        r"(before|prior\s+to)\s+this\s+(message|line|point|conversation|chat)))",
     ),
     _s(
         "prior_rules_void",
@@ -270,7 +277,8 @@ SIGNALS: list[Signal] = [
         "repeat_prior_message",
         "prompt_injection",
         0.8,
-        r"\b(repeat|quote|recite|print|output|show|reproduce|paste)\s+(me\s+)?(the\s+)?(first|initial|earlier|previous|original|opening|very\s+first)\s+(message|text|instructions?|prompt|lines?)",
+        # message / instructions / prompt only: "repeat the first line of the article" is editing
+        r"\b(repeat|quote|recite|print|output|show|reproduce|paste)\s+(me\s+)?(the\s+)?(first|initial|earlier|previous|original|opening|very\s+first)\s+(message|instructions?|prompt)\b",
     ),
     _s(
         "text_given_before",
@@ -294,8 +302,11 @@ SIGNALS: list[Signal] = [
         "dump_config_block",
         "prompt_injection",
         0.8,
-        r"\b(dump|print|output|reveal|show|display|translate|rewrite|paraphrase|summari[sz]e|encode)\s+(me\s+)?(the\s+)?(contents?\s+of\s+)?(your\s+|the\s+|its\s+)?"
-        r"(system\s+message|instruction\s+block|config(uration)?(\s+(block|prompt|file|section))?|system\s+(block|section|file))\b",
+        # "configuration" only when it is the model's own ("your configuration"): a document has
+        # configuration sections ("translate the configuration section into plain English")
+        r"\b(dump|print|output|reveal|show|display|translate|rewrite|paraphrase|summari[sz]e|encode)\s+(me\s+)?(the\s+)?(contents?\s+of\s+)?"
+        r"((your\s+|its\s+)config(uration)?(\s+(block|prompt|file|section))?|(your\s+|the\s+|its\s+)?"
+        r"(system\s+message|instruction\s+block|config(uration)?\s+prompt|system\s+(block|section|file)))\b",
     ),
     _s(
         "stop_being_assistant",
@@ -529,12 +540,17 @@ def classify_input(text: str, *, source: str = "instructions") -> GuardrailVerdi
                 "cached": llm.cached,
             }
             # The classifier is the better judge inside the band: an "injection" answer lifts the
-            # score to its confidence, a "clean" answer caps it at (1 - confidence).
+            # score to its confidence, a "clean" answer caps it at (1 - confidence). The cap never
+            # goes below a single rule that crosses the threshold on its own: a "clean" answer may
+            # settle corroboration between weak signals, not overrule a strong phrase.
             if llm.injection:
                 score = max(score, llm.confidence)
                 category = llm.category
             else:
-                score = min(score, round(1.0 - llm.confidence, 3))
+                strong = max(
+                    (s["weight"] for s in signals if s["weight"] >= threshold), default=0.0
+                )
+                score = max(strong, min(score, round(1.0 - llm.confidence, 3)))
             # Cached verdicts cost nothing: no model/tokens, so the pipeline books no ledger row.
             if not llm.cached:
                 model, input_tokens, output_tokens = llm.model, llm.input_tokens, llm.output_tokens

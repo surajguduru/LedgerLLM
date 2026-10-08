@@ -1,4 +1,4 @@
-"""POST /v1/feedback — thumbs up/down on a request id. Our online quality signal (owner: Yashraj)."""
+"""POST /v1/feedback — thumbs up/down on a request id. Our online quality signal."""
 
 from __future__ import annotations
 

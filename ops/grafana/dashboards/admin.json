@@ -1,7 +1,7 @@
 {
   "uid": "ledgerllm-admin",
   "title": "LedgerLLM \u2014 Admin",
-  "description": "Operator/admin view over the production Neon database (read-only replica). Exact values from the ledger and audit tables, durable across restarts. Read-only by design: suspend, revoke, rotate and plan changes go through /admin/*. Owner: Yashraj.",
+  "description": "Operator/admin view over the production Neon database (read-only replica). Exact values from the ledger and audit tables, durable across restarts. Read-only by design: suspend, revoke, rotate and plan changes go through /admin/*.",
   "tags": [
     "ledgerllm",
     "admin"

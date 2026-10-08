@@ -1,6 +1,6 @@
 # Load test and latency evidence
 
-Owner: Yashraj. Two separate measurements, deliberately not one (decision **D8**):
+Two separate measurements, deliberately not one (decision **D8**):
 
 | | Tool | Provider | Question it answers |
 |---|---|---|---|
@@ -20,10 +20,10 @@ nothing about our code. Real-provider latency is measured separately on a small 
 | Burst — **Postgres 16, `MOCK_LATENCY_MS=800`** | ✅ **done — HOLDS. This is the proof** |
 | Platform overhead — sequential, local | ✅ done, target met |
 | Burst — SQLite | ✅ done, kept below only as the contrast that shows the write lock |
-| Burst — Render deployment | ⬜ pending deployment (Suraj) |
-| Real-provider latency — Gemini | ⬜ pending (needs `LLM_API_KEY`) |
+| Burst — Render deployment | ⬜ not run yet (needs the deployment's `ADMIN_TOKEN` to set a test budget) |
+| Real-provider latency — Gemini free tier, Groq free tier, production | ✅ done — numbers in the README benchmarks table |
 
-> **8 Oct: the test had to be redesigned.** Suraj's rate limiter and response cache landed on `main`,
+> **8 Oct: the test had to be redesigned.** The rate limiter and response cache landed on `main`,
 > and between them they made the old burst test meaningless — it stopped producing a single 402. See
 > *Why one key and one document no longer works* below. Numbers on this page are from the new design.
 
@@ -109,47 +109,56 @@ Our own cost per request: auth, idempotency, rate-limit check, cache lookup, bud
 guardrail heuristics, ledger write, redacted log, audit, metrics. `MOCK_LATENCY_MS=0` removes the
 model, and requests are **sequential** so the number is per-request work, not queueing delay.
 
-`latency_sample.py --per-size 20 --sleep 0` · mock · SQLite · macOS dev machine · 8 Oct
+`latency_sample.py --alias enterprise --per-size 20 --sleep 0` · mock · macOS dev machine · 8 Oct (evening re-run on the current code)
 
-| Document | Input tokens | p50 | steady-state max |
-|---|---|---|---|
-| small | 1,192 | **7 ms** | 9 ms |
-| medium | 3,192 | **8 ms** | 9 ms |
-| large | 6,192 | **10 ms** | 10 ms |
+| Document | Input tokens | p50, SQLite | steady-state max, SQLite | p50, Postgres (Docker) | steady-state max, Postgres |
+|---|---|---|---|---|---|
+| small | 1,192 | **13 ms** | 23 ms | **18 ms** | 23 ms |
+| medium | 3,192 | **27 ms** | 31 ms | **32 ms** | 59 ms |
+| large | 6,192 | **44 ms** | 50 ms | **53 ms** | 56 ms |
 
-**Target: p99 ≤ 25 ms → met in steady state.**
+**Target: p99 ≤ 25 ms → met for ~1k-token documents only.**
 
-Two honest notes:
-- The **first request after process start** is 12–47 ms (lazy imports, cold connection pool, empty
+Three honest notes:
+- The **first request after process start** is 66–71 ms (lazy imports, cold connection pool, empty
   caches). It is excluded above and reported separately rather than folded into a percentile.
-- Overhead rose from **6/7/8 ms** (7 Oct) to **7/8/10 ms** as the pipeline gained a rate-limiter
-  upsert and a cache lookup. Still ~2 ms of growth from a 1.2k- to a 6.2k-token document, i.e.
-  roughly flat in document size — nothing in the platform path scales with length except the
-  guardrail regex scan.
+- Overhead rose from **7/8/10 ms** (8 Oct morning, `main` @ 72a7ab3) to **13/27/44 ms** on the current
+  code. The pipeline gained the per-tenant limiter upsert, title scanning, the body-size check and a wider
+  guardrail rule set; and the cost now clearly grows with the document, because the input guardrail scans
+  all of it: measured in isolation, `classify_input(document)` is 3.5 / 9 / 18 ms and the log redactor
+  0.6 / 1.6 / 3.1 ms on these three sizes. That scan is the next thing to optimise (or to cap at the first
+  N characters) if the 25 ms target matters for long documents.
+- Use a key whose plan allows 60 requests inside a minute (`--alias enterprise`); the pro key's 60 rpm is
+  exactly the sample size and fails the run with 429s if anything else used the key that minute.
 
 ---
 
 ## Result 2 — Burst, quota enforcement ✅ **HOLDS on Postgres**
 
-**50 users, 50 keys on one tenant, 60 s, `MOCK_LATENCY_MS=800`, Postgres 16** · 8 Oct
+**50 users, 50 keys on one enterprise tenant, 60 s, `MOCK_LATENCY_MS=800`, Postgres 16** · 8 Oct (evening re-run)
 Tenant budget **$0.02**, provisioned by the locustfile at test start.
 
 | | |
 |---|---|
-| Requests | ~13,000 (**218 req/s**) |
-| `200 OK` | 157 |
-| `402 budget_exceeded` | **8,650** |
-| `429 rate_limited` | 4,195 (from the user class that trips the limiter on purpose) |
-| p50 / p95 / p99 | 55 ms / 95 ms / **140 ms** |
+| Requests | 16,047 (**268 req/s**) |
+| `200 OK` | 157 (27 of them the burst tenant; the rest the steady pro key, mostly cache hits) |
+| `402 budget_exceeded` | **1,173** |
+| `429 rate_limited` | 14,733 (5,773 from the user class that trips the limiter on purpose; the rest the burst tenant's own 600 rpm, shared by its 50 keys) |
+| p50 / p95 / p99 | 24 ms / 84 ms / **140 ms** |
 
 ```
   spent <= limit : True  ($0.018765 of $0.020000)
   reserved == 0  : True  ($0.000000)
-  402 refusals   : 8650
+  402 refusals   : 1173
   unspent        : $0.001235 (6.2% of budget, 1.8x the average request) — reservation pessimism, D2
 
 quota enforcement: HOLDS
 ```
+
+The morning run on `main` @ 72a7ab3 showed 8,650 × 402 and 4,195 × 429 at 218 req/s. Since then the rate
+limit is enforced per tenant as well as per key (a tenant's keys share the plan's rpm), so most of the
+burst is now refused at stage ② before the budget is consulted; the budget cutoff is still exercised
+1,173 times, and the verdict and the spend are unchanged.
 
 **Why this run is the proof and the SQLite one was not.** SQLite takes a database-wide write lock, so
 concurrent requests queue instead of racing — the budget looks safe for the *wrong* reason, because
@@ -163,7 +172,7 @@ exists for.
 which every concurrent request reads the same stale `spent` and all of them pass. The wider the
 window, the more requests slip through it.
 
-This is no longer a thought experiment: Naresh **implemented the rejected design and measured it**
+This is no longer a thought experiment: we **implemented the rejected design and measured it**
 (README, "Cost attribution & budgets"). On a $0.004 budget with 50 concurrent requests, check-then-call
 admitted 10 and spent **164 % of the limit**; the atomic reserve admitted 4 and spent 66 %, with the
 ledger total equal to spend and nothing left reserved. That is the counterfactual, measured rather
@@ -192,11 +201,11 @@ reporting **INCONCLUSIVE** (exit 2) when a run produces no 402s.
 
 ### Postgres vs SQLite, same code
 
-| | SQLite | Postgres 16 |
-|---|---|---|
-| Throughput | 228 req/s | 218 req/s |
-| p99 | 670 ms | **140 ms** |
-| Quota verdict | HOLDS (but serialised) | **HOLDS (genuinely raced)** |
+| | SQLite (8 Oct morning) | Postgres 16 (8 Oct morning) | Postgres 16 (8 Oct evening, current code) |
+|---|---|---|---|
+| Throughput | 228 req/s | 218 req/s | 268 req/s |
+| p99 | 670 ms | **140 ms** | **140 ms** |
+| Quota verdict | HOLDS (but serialised) | **HOLDS (genuinely raced)** | **HOLDS (genuinely raced)** |
 
 Postgres is **4.8× better at p99** on identical code. That gap is the proof that the SQLite p99 was
 its write lock and not our overhead — and it is `DESIGN.md` §5 limit #1 (four writes per request)
@@ -210,10 +219,11 @@ panel from steady traffic, not from a burst.
 
 ---
 
-## Result 3 — Real-provider latency ⬜ pending
+## Result 3 — Real-provider latency
 
 `latency_sample.py` with `LLM_PROVIDER=gemini`: 30 requests, 10 per size, 4.5 s apart to stay inside
 the free tier's per-minute limit. Reports end-to-end p50/p95/p99, model-only (`usage.latency_ms`) and
-the difference. Verified working against the mock; needs a Gemini key for the real numbers.
+the difference. Results (Gemini free tier, Groq free tier, and production on Render + Neon) are in the
+README benchmarks table; the free-tier quota refusals are recorded as failures, not retried.
 
 Target for a ~3k-token document: p50 ≤ 3 s, p99 ≤ 8 s.

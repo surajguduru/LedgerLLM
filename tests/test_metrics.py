@@ -1,4 +1,4 @@
-"""Prometheus metrics. OWNER: Yashraj.
+"""Prometheus metrics.
 
 These tests assert the counters actually move, because a dashboard built on a metric that never
 increments looks healthy while telling you nothing.
@@ -18,8 +18,7 @@ from tests.conftest import SAMPLE_TEXT, make_tenant, summarize
 
 DASHBOARD = Path(__file__).resolve().parent.parent / "ops/grafana/dashboards/ledgerllm.json"
 
-# Metrics the dashboard is ready for but another owner still has to emit. Remove as they land.
-# ledgerllm_cache_total landed with Suraj's response cache (PR #4), so nothing is pending now.
+# Metrics the dashboard is ready for but the app does not emit yet. Empty: every panel has its metric.
 PENDING_METRICS: set[str] = set()
 
 

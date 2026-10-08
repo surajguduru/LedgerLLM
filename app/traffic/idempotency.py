@@ -1,6 +1,6 @@
 """Idempotency keys: same (tenant, key, body) -> replay the stored response; same key, different body -> 409.
 
-OWNER: Suraj. Records live for TTL (24 h); expired records are ignored on lookup and deleted
+Records live for TTL (24 h); expired records are ignored on lookup and deleted
 opportunistically on about 1 % of claims.
 
 In-flight policy: before the pipeline runs, `claim` inserts a *pending* record (status_code 0). The primary

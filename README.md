@@ -2,6 +2,9 @@
 
 **A multi-tenant LLM API with per-tenant cost attribution, quotas, abuse protection and audit logging.**
 
+**Live:** <https://ledgerllm.onrender.com> — sign up at [`/app`](https://ledgerllm.onrender.com/app) for a free-plan key and the
+playground, or read the API at [`/docs`](https://ledgerllm.onrender.com/docs). It deploys from `main` once CI passes.
+
 The product feature is deliberately small: *summarize any URL or text*. Everything around that one
 LLM call is the point — the parts a SaaS vendor needs before selling an LLM feature to many customers:
 
@@ -18,15 +21,84 @@ LLM call is the point — the parts a SaaS vendor needs before selling an LLM fe
 - **Observability**: Prometheus metrics, Grafana dashboard, structured JSON logs; a Locust burst test
   that proves quota enforcement holds
 
+## Architecture
+
+One container, one database, one model call per request. Everything a request touches is below; the
+numbered stages are the order the pipeline runs them (section "How a request flows").
+
+```mermaid
+flowchart LR
+    subgraph Clients
+        C[API client<br/>X-API-Key]
+        B[Tenant browser<br/>/app portal, /dashboard]
+    end
+
+    subgraph API["LedgerLLM API — one FastAPI container on Render"]
+        direction TB
+        A1["① auth: key hash → tenant, plan"]
+        A2["② rate limit: per key + per tenant, 60 s window"]
+        A3["③ idempotency: replay or claim"]
+        A4["④ fetch URL (SSRF guard) → extract → fit (head+tail / map-reduce)"]
+        A5["④½ exact-match response cache"]
+        A6["⑤ estimate worst case → ATOMIC budget reserve"]
+        A7["⑥ input guardrail: regex signals (+ LLM classifier)"]
+        A8["⑦ model call(s), versioned prompt, fallback chain"]
+        A9["⑧ output moderation"]
+        A10["⑨ settle cost, ledger rows ⑩ redacted log, audit, cache, idempotency store"]
+        J["background judge worker<br/>(5 % sample, paced)"]
+        A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7 --> A8 --> A9 --> A10
+        A10 -. async .-> J
+    end
+
+    subgraph State["Postgres (Neon in production, SQLite in dev/tests)"]
+        T[(tenants, api_keys, users, sessions)]
+        L[(usage_ledger, budget_periods,<br/>rate_limit_windows, idempotency_records,<br/>response_cache)]
+        R[(request_logs, audit_events,<br/>quality_samples, feedback, payments)]
+    end
+
+    subgraph Providers["Model providers (routed per model, config/prices.yaml)"]
+        G[Gemini<br/>OpenAI-compatible endpoint]
+        Q[Groq]
+        AN[Anthropic SDK]
+    end
+
+    C -- "JSON over HTTPS" --> A1
+    B -- "session cookie, same-origin JSON" --> A1
+    A1 & A2 & A3 & A5 & A6 & A10 <--> L
+    A1 <--> T
+    A10 --> R
+    A8 -- "HTTPS, JSON" --> G
+    A8 -. "by model name" .-> Q
+    A8 -. "enterprise plan" .-> AN
+    J -- "judge call" --> G
+    J --> R
+
+    subgraph Ops["Operations"]
+        P[Prometheus + alert rules<br/>docker-compose / self-hosted]
+        GA[Grafana admin dashboard<br/>Render, reads a Neon read replica]
+        CI[GitHub Actions: ruff, pytest ×2,<br/>red-team gate, summarization gate]
+    end
+    P -. "scrapes /metrics (bearer token)" .-> API
+    GA -. SQL .-> State
+    CI -- "green checks → Render deploys main" --> API
+```
+
+Reading it left to right: a client or the portal calls the API; stages ① to ⑥ are cheap and talk only
+to Postgres, so over-quota or abusive traffic never reaches a model; stage ⑦ scans the input; stage ⑧
+is the only network call to a provider; ⑨ and ⑩ write the ledger, the redacted log and the audit trail
+in one transaction. The judge samples finished responses asynchronously. Prometheus and the alert rules
+run in the local docker-compose stack and any self-hosted Prometheus; production observability is the
+Grafana admin dashboard over a Neon read replica plus the `request_logs` and `audit_events` tables.
+
 ## Setup
 
 You need **Python 3.11 or newer**, `git`, and `make`. Nothing else — no database, no API key, no Docker.
 
 ```bash
 python3 --version          # must print 3.11.x or higher. If not: https://www.python.org/downloads/
-git clone <repo-url> ledgerllm && cd ledgerllm
+git clone https://github.com/surajguduru/LedgerLLM.git ledgerllm && cd ledgerllm
 make install               # creates .venv and installs dependencies (1–2 minutes)
-make test                  # all tests pass; "xfail" lines are planned work, not failures
+make test                  # 690 tests on SQLite with the mock model, about 10 s
 make dev                   # API on http://localhost:8000 — open /docs for the OpenAPI UI
 ```
 
@@ -95,8 +167,8 @@ make down
 
 ```
 client ─JSON/HTTPS─▶ ① auth (API key → tenant, plan)         ⑥ input guardrail (instructions, then document)
-                     ② idempotency replay                     ⑦ LLM call with the versioned prompt
-                     ③ rate limit (per key + tenant, /min)   ⑧ output moderation
+                     ② rate limit (per key + tenant, /min)   ⑦ LLM call with the versioned prompt
+                     ③ idempotency replay                     ⑧ output moderation
                      ④ fetch URL + extract text (SSRF-guarded) ⑨ settle actual cost; ledger row; metrics
                      ⑤ estimate cost → ATOMIC budget reserve  ⑩ redacted request log; audit; idempotent store
 ```
@@ -136,13 +208,18 @@ Headers on every response: `X-Request-ID`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 | `GET /app` | **tenant portal**: sign up / sign in, manage API keys, usage per key, daily and monthly spend |
 | `/app/api/*` | portal JSON API (session cookie): `signup`, `login`, `logout`, `me`, `keys` (create, `/{id}/revoke`, `/{id}/rotate`), `models`, `playground/summarize`, `usage?period=`, `statement.csv`, `billing`, `billing/plan` |
 | `GET /dashboard` | usage/billing page for a tenant (paste a key) |
-| `POST /admin/tenants`, `POST /admin/tenants/{id}/keys`, `GET /admin/tenants` | tenant and key management (`Authorization: Bearer $ADMIN_TOKEN`) |
-| `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus, health, OpenAPI |
+| `GET`/`POST /admin/tenants`, `PATCH /admin/tenants/{id}` (plan, status, budget override) | tenant management (`Authorization: Bearer $ADMIN_TOKEN`) |
+| `GET`/`POST /admin/tenants/{id}/keys`, `POST /admin/keys/{id}/rotate`, `DELETE /admin/keys/{id}` | key management: list, create, rotate (once), revoke |
+| `GET /admin/audit`, `GET /admin/quality` | audit trail (filter by tenant / event type, cursor `before`); online judge scores per prompt version |
+| `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus (needs `Authorization: Bearer $METRICS_TOKEN` when set; 404 outside dev/test without it), liveness + provider + guardrail mode + deployed commit, OpenAPI |
+| `GET /grafana` | redirects to the admin Grafana (`GRAFANA_URL`), the operator's view of every tenant's spend |
 
 Errors always look like `{"error": {"code": "…", "message": "…", "request_id": "…"}}` with stable codes:
 `401 missing_api_key | invalid_api_key` · `403 tenant_suspended | model_not_allowed` · `429 rate_limited` ·
 `402 budget_exceeded` · `400 blocked_input | fetch_blocked` · `422 fetch_failed | validation_error` ·
-`409 idempotency_conflict` · `502 upstream_error`.
+`409 idempotency_conflict | idempotency_in_progress` · `404 request_not_found` (feedback) ·
+`413 content_too_large` (body over `MAX_REQUEST_BYTES`, default 4 MB) · `404 not_found` (no such route) ·
+`405 method_not_allowed` · `502 upstream_error`.
 
 ## Tenant portal
 
@@ -168,8 +245,8 @@ reported as not found. Admins keep full control through `/admin`. Decision D24.
 
 | File | Contents |
 |---|---|
-| `config/plans.yaml` | requests/min, monthly budget, input size limit and allowed models per plan; soft-warning threshold |
-| `config/prices.yaml` | list $/MTok per model with a **version**; every ledger row records which version priced it. Tenants are billed at list price even when the platform runs on a free-tier key |
+| `config/plans.yaml` | per plan: requests/min, monthly budget, input size limit, map-reduce ceiling, cache TTL, default model, allowed models, subscription price; the soft-warning threshold |
+| `config/prices.yaml` | list $/MTok per model with a **version** (`2026-10-08.2`), the provider that serves each model and the reasoning-token headroom of reasoning models; every ledger row records which version priced it. Tenants are billed at list price even when the platform runs on a free-tier key |
 | `prompts/summarize_v1.yaml`, `summarize_v2.yaml` | system prompt + user template; the document is wrapped as data; a content hash is recorded per request. v1 is the default; v2 is available (eval: no judge difference beyond noise, longer output; see `docs/MEASUREMENTS.md`) |
 
 Rolling out a new prompt = add `summarize_v2.yaml` and set `SUMMARIZE_PROMPT_VERSION`. Rolling back = set it back.
@@ -287,7 +364,7 @@ applies from the next request.
 | Burst of 50 concurrent requests, $0.004 budget | 4 admitted, 46 × 402; spent $0.002628 (66 % of limit), ledger total = spent, nothing left reserved | Postgres 16, mock provider with 50 ms latency, `python -m scripts.bench_billing burst` |
 | Same burst with *check `spent`, then call* (the design D2 rejects) | 10 admitted; spent $0.006570 = **164 % of the limit** | same |
 | Reservation pessimism (estimate ÷ actual) | median 1.43×, p95 1.84× | 9 requests, 3 styles × 50/150/300 words, ~3k-token document, mock token counts, `python -m scripts.bench_billing costs` |
-| Cost of a ~3k-token request at `gemini-3.8-flash` list price | $0.0027 actual, reserved $0.0031–$0.0050 depending on `max_words` | same; real-model output lengths pending a Gemini run |
+| Cost of a ~3k-token request at `gemini-3.8-flash` list price | $0.0027 actual, reserved $0.0031–$0.0050 depending on `max_words` | same; output lengths from the mock, priced at `gemini-3.8-flash` list price |
 | Guardrail share of spend | 0 % | `GUARDRAIL_LLM=off` (the default): heuristic guardrails make no model calls |
 
 The 34 % headroom in the burst row is the accepted cost of D2: the last requests that would have fit are refused
@@ -299,7 +376,7 @@ because their worst case would not. Decision D23 in `docs/DESIGN.md` covers how 
   request (Postgres and SQLite). Free 5, pro 60, enterprise 600 requests/minute. A check costs p50 0.75 ms / p99 1.4 ms
   on Postgres; the accepted cost of a fixed window is up to 2× rpm across a window boundary (measured: exactly 2.0×).
 - **Idempotency** — `Idempotency-Key` is scoped per tenant and kept for 24 h. The same key with the same body replays the
-  stored response and is never billed twice; with a different body it is 409 `idempotency_conflict`; while the first
+  stored response and is never billed twice (a replay still counts against the rate limit and carries `X-RateLimit-*`); with a different body it is 409 `idempotency_conflict`; while the first
   request is still running, a duplicate gets 409 `idempotency_in_progress`. A failed request frees the key for a retry.
 - **Response cache** — exact match on tenant, model, prompt hash, options and the extracted text, checked before the budget
   reserve. A hit is free (`usage.cached: true`, `cost_usd: 0`) and is booked as a zero-cost ledger row so request counts
@@ -337,15 +414,20 @@ category, method and source with the most recent (redacted) matches. Flip to `en
 looks right. A blocked request costs the tenant nothing beyond the classifier call; the budget reservation
 is released.
 
-**Evidence.** `make eval-redteam` runs 50 attacks and 50 benign look-alikes (`evals/redteam/cases.jsonl`) and
-fails CI below catch ≥ 0.90 / FPR ≤ 0.05. Heuristics-only: **96 % catch, 2 % FPR, p50 0.1 ms** (the two
-misses are a role-play persona and reversed text; the false positive is a security article quoting an
-attack string). A **held-out set** of 20 reworded attacks (`heldout.jsonl`, written without looking at the rules) is
-the honest number: the regexes alone caught **5 %** of it. That is why, with `GUARDRAIL_LLM=on`, every
-instruction below the block line is now classified rather than only the uncertain band
-(`GUARDRAIL_LLM_INSTRUCTIONS=always`): the cascade caught **90 %** of the held-out set unseen, for about
-$0.04 per 1,000 uncached requests. The regex layer is the free pre-filter and the regression floor;
-the classifier is the detector.
+**Evidence.** `make eval-redteam` runs 50 attacks and 65 benign look-alikes (`evals/redteam/cases.jsonl`,
+including 15 editorial instructions such as "ignore everything above the fold") and fails CI below
+catch ≥ 0.90 / FPR ≤ 0.05. Heuristics-only: **96 % catch, 1.5 % FPR, p50 0.1 ms** (the two misses are a
+role-play persona and reversed text; the false positive is a security article quoting an attack string).
+A first **held-out set** of 20 reworded attacks (`heldout.jsonl`) caught **5 %** with the regexes alone;
+it was then used while writing the "rewordings" rules (65 % after), so it no longer measures
+generalisation. A fresh set, `heldout_v2.jsonl` (20 attacks, direct and embedded in documents, plus 10
+benign look-alikes, written before running the rules on it and never used to tune them), is the honest
+number: heuristics only catch **0 of 20** (3 score a signal, none reaches the block line), with 0 of 10
+false positives. **The regex layer does not generalise to unseen paraphrases.** It is the free
+pre-filter and the regression floor; the LLM classifier (`GUARDRAIL_LLM=on`) is the layer meant to catch
+rewordings, which is why every instruction below the block line is classified rather than only the
+uncertain band (`GUARDRAIL_LLM_INSTRUCTIONS=always`): the cascade caught **90 %** of the first held-out
+set before it was seen, for about $0.04 per 1,000 uncached requests.
 
 ## Summarization quality
 
@@ -436,18 +518,24 @@ the judge model for faithfulness and coverage (1–5) and records:
 
 `GET /admin/quality` returns means per prompt version, judge cost per 1,000 samples and the recent samples.
 Judge cost at list price: ≈ $0.0027 per sample on a 3k-token document, so ≈ **$0.13 per 1,000 requests** at 5 %.
+The judge model is `QUALITY_JUDGE_MODEL`, which defaults to `DEFAULT_MODEL` (`gemini-3.8-flash`); on the free tier that
+model allows 20 requests a day shared with production completions, so a deployment on free-tier keys should point the
+judge at `gemini-3.5-flash-lite`.
 
 ## Evaluation and CI
 
 | Gate | Command | What it measures |
 |---|---|---|
-| Red-team | `make eval-redteam` | catch rate and false-positive rate of the input guardrail on `evals/redteam/cases.jsonl` (50 attacks / 50 benign); fails below `thresholds.yaml` (0.90 / 0.05); `--llm on` measures the cascade |
+| Red-team | `make eval-redteam` | catch rate and false-positive rate of the input guardrail on `evals/redteam/cases.jsonl` (50 attacks / 65 benign); fails below `thresholds.yaml` (0.90 / 0.05); `--llm on` measures the cascade |
 | Shadow report | `python -m evals.redteam.shadow_report` | what `GUARDRAILS_MODE=shadow` would have blocked on real traffic, by stage / category / method / source |
 | Summarization | `make eval-summ` (`PROVIDER=gemini` for the LLM judge) | key-point coverage, length, leak checks; with the judge: faithfulness and coverage on a 1–5 scale |
 | Redaction | part of `make test` | every case in `evals/redaction/cases.jsonl` is redacted and nothing else is lost |
 
-GitHub Actions runs lint, the test suite on SQLite **and** Postgres, and both eval gates on every pull request.
+GitHub Actions runs lint, the test suite on SQLite **and** Postgres, and both eval gates on every pull request and
+on direct pushes to `main`; the merge commit itself is skipped, since the PR's checks already covered the same tree.
 The LLM-judge run executes only when a PR touches `prompts/` or the feature code, to stay inside free-tier rate limits.
+Render deploys a `main` commit once its GitHub checks have finished without failure (`autoDeployTrigger: checksPass`).
+`main` has no branch protection yet, so the gate relies on merging only green pull requests.
 
 **Prompt rollout.**
 1. Add a new file (`prompts/summarize_v2.yaml`); the old version stays loadable, and the content hash changes.
@@ -471,58 +559,68 @@ python loadtest/verify_quota.py        # prints "quota enforcement: HOLDS" if sp
 Measured values with their conditions. Raw log and trade-offs: [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md).
 Commands and the full load-test write-up: [`loadtest/README.md`](loadtest/README.md).
 
-All numbers below were measured on `main` @ `72a7ab3` (6–8 Oct), mock provider; later merges changed the
-pipeline (single final transaction, per-tenant rate limit, rule-aware cache key) but not its hot path, so they
-are expected to hold — re-run `make loadtest` and `python loadtest/verify_quota.py` before quoting them. The burst and load figures are on
-**Postgres 16** in Docker, the overhead figure on SQLite. **The mock is priced
-identically to `gemini-3.8-flash` in `config/prices.yaml`, so dollar figures are real list-price
-arithmetic**; only output *length* is synthetic.
+The mock-provider numbers below were re-measured on **8 Oct** on the revision this README ships with
+(`main` after the connection-release fix, with the guardrail and API-hardening changes), on an Apple M5 laptop
+with Postgres 16 in Docker; real-model and production rows carry their own dates and were not re-run.
+**The mock is priced identically to `gemini-3.8-flash` in `config/prices.yaml`, so dollar figures are real
+list-price arithmetic**; only output *length* is synthetic.
 
 | Metric | Value | Target | Conditions |
 |---|---|---|---|
-| Platform overhead (auth + quota + cache + guardrail heuristics, no model call) | **p50 7 / 8 / 10 ms** for 1.2k / 3.2k / 6.2k-token documents; worst steady-state request 10 ms | p99 ≤ 25 ms ✅ | `latency_sample.py --per-size 20 --sleep 0`, `MOCK_LATENCY_MS=0`, sequential. First request after process start is 12–47 ms (warm-up) and is excluded |
-| Throughput | **218 req/s** | ≥ 50 req/s ✅ | 50 Locust users, 60 s, `MOCK_LATENCY_MS=800`, Postgres 16, one instance |
-| Latency under load, p50 / p95 / p99 | **55 / 95 / 140 ms** | — | same run. On SQLite the same code gives p99 670 ms — **4.8× worse**, which is its database-wide write lock, not our overhead (`DESIGN.md` §5 limit #1). Aggregate percentiles are dominated by 402 refusals, which never reach the model |
-| Burst quota test: admitted / refused / ledger vs limit | **157 admitted · 8,650 refused (402) · $0.018765 booked of a $0.020000 limit · reserved back to $0** → `quota enforcement: HOLDS` | never exceed the limit ✅ | **Postgres 16**, 50 users on 50 keys of one tenant, 60 s, `MOCK_LATENCY_MS=800`. Postgres (not SQLite) so the requests genuinely race; 800 ms is the hostile case, since it is the window a naive check-then-call would lose. Measured overspend **$0.000000**. 4,195 × 429 came from a user class that trips the limiter on purpose |
+| Platform overhead (auth + limiter + cache + budget + guardrail heuristics + redacted log, no model call) | SQLite: **p50 13 / 27 / 44 ms**; Postgres (local Docker): **p50 18 / 32 / 53 ms** for 1.2k / 3.2k / 6.2k-token documents; slowest steady-state request 31 / 59 ms (SQLite / Postgres, 3.2k) | p99 ≤ 25 ms: ✅ for ~1k-token documents, ❌ above that | `latency_sample.py --per-size 20 --sleep 0`, `MOCK_LATENCY_MS=0`, sequential, 8 Oct. The first request after process start (66–71 ms) is excluded. Overhead grows with document size because the input guardrail scans the whole document: `classify_input` alone is 3.5 / 9 / 18 ms on these sizes and the log redactor 0.6 / 1.6 / 3.1 ms. Earlier in the week the same path measured 7 / 8 / 10 ms; the per-tenant limiter, title scanning, the body-size check and the wider rule set were added since |
+| Throughput | **268 req/s** | ≥ 50 req/s ✅ | 50 Locust users, 60 s, `MOCK_LATENCY_MS=800`, Postgres 16, one process, 8 Oct (16,047 requests) |
+| Latency under load, p50 / p95 / p99 | **24 / 84 / 140 ms** | — | same run. Aggregate percentiles are dominated by 429 and 402 refusals, which never reach the model. On SQLite the same code gave p99 670 ms earlier in the week — its database-wide write lock, not our overhead (`DESIGN.md` §5 limit #1) |
+| Burst quota test: admitted / refused / ledger vs limit | **27 admitted · 1,173 refused with 402 · $0.018765 booked of a $0.020000 limit · reserved back to $0** → `quota enforcement: HOLDS` | never exceed the limit ✅ | **Postgres 16**, 50 users on 50 keys of one enterprise tenant, 60 s, `MOCK_LATENCY_MS=800`, 8 Oct. Postgres (not SQLite) so the requests genuinely race; 800 ms is the window a naive check-then-call would lose. Measured overspend **$0.000000**. Of 16,047 requests, 14,733 were 429s: the enterprise plan's 600 requests/min is shared by all of a tenant's keys, so the limiter now refuses most of the burst before the budget is consulted; the 1,173 requests it let through after the budget was spent are the ones the cutoff refused |
 | Reservation pessimism | **6.2 %** of budget unspent ($0.001235 = 1.8× the average request) | — | same run. The measured cost of reserve-then-settle (D2): the reserve books worst-case output tokens and settles for less |
-| Cost per request at list price | **$0.002776** (3.2k-token document, bullets, `max_words=150`) | ≤ $0.004 ✅ | 3,192 input + ~102 output tokens. A real 150-word summary is ~200 output tokens → ≈ $0.0031, still inside target |
+| Cost per request at list price | **$0.002720** (3.2k-token document, bullets, `max_words=150`) | ≤ $0.004 ✅ | 3,181 input + 89 output tokens (mock length). A real 150-word summary is ~200 output tokens → ≈ $0.0031, still inside target. Reserved: $0.0031 at 50 words, $0.0039 at 150, $0.0050 at 300 |
 | Guardrail classifier cost per 1,000 requests | ≈ **$0.015** (instructions) – **$0.07** (1.5k-token documents) | — | 12 % of eval cases in the uncertain band × Flash-Lite list price |
 | Online judge cost per 1,000 requests | ≈ **$0.13** | — | 5 % sampled, 3k-token source, Gemini 3.8 Flash list price; billed to the platform, not tenants (D17) |
-| Metric cardinality | **171 series**, of which only **18** carry a `tenant` label → **6 per tenant** | — | 3 tenants, 1 model, measured with Prometheus `count()`. Extrapolates to ~27,000 series at 1,000 tenants × 3 models — `DESIGN.md` §5 limit #4. The 85 `http_*` series are mostly the cost of widening the latency histogram from 3 to 14 buckets, without which neither latency target is measurable |
+| Metric cardinality | **201 series** after the burst, of which only **18** carry a `tenant` label → **6 per tenant** | — | 3 tenants, 1 model, counted on `/metrics`, 8 Oct: 58 `ledgerllm_*`, 133 `http_*` (every handler × status × 14 latency buckets), the rest Python runtime. Extrapolates to ~27,000 series at 1,000 tenants × 3 models — `DESIGN.md` §5 limit #4. The `http_*` share is the cost of widening the latency histogram from 3 to 14 buckets, without which neither latency target is measurable |
 | End-to-end latency p50 / max (real model, **partial**) | ~1k-token doc **6.6 s / 28.3 s** (n = 8) · ~2.3k-token doc **5.7 s / 13.2 s** (n = 4) · ~6k-token: no successful call; platform overhead p50 **57–94 ms** | p50 ≤ 3 s, p99 ≤ 8 s ❌ | `latency_sample.py`, Gemini 3.8 Flash **free tier**, 8 Oct; 18 of 30 calls refused by the provider's quota (recorded as failures, not retried). Model time is > 98 % of the total; the free tier's queueing dominates. Re-run on a paid key for a full sample |
 | End-to-end latency p50 / max (real model, Groq) | ~1k-token doc **0.50 s / 0.63 s** (n = 10) · ~2.3k **0.73 s / 1.54 s** (n = 10) · ~4.4k **0.82 s / 1.08 s** (n = 6); platform overhead p50 **64–133 ms** | p50 ≤ 3 s, p99 ≤ 8 s ✅ | `latency_sample.py`, `qwen/qwen3.8-27b` on Groq's **free tier**, 30 requests paced 20 s apart, 8 Oct; 26 of 30 succeeded, 4 long documents refused by the tokens-per-minute cap (recorded as failures, not retried). Same pipeline as the Gemini row: the difference between the two rows is the provider |
-| End-to-end latency p50 / p95 / p99 in **production** (Render + Neon, real Gemini) | **2,273 / 25,660 / 25,660 ms**; 3 of 15 requests over 8 s. Platform overhead p50 **~860 ms** (range 767–1,126 ms) | p50 ≤ 3 s ✅, p99 ≤ 8 s ❌, overhead p99 ≤ 25 ms ❌ | Exact percentiles over `request_logs` on the deployment, n = 15 successful calls, 8 Oct — at that n the p95 and p99 are both just the slowest call, so read them as "the tail reached 25 s", not as a stable percentile. The cause is **cross-region database round trips, not CPU**: the pipeline makes ~19 database calls per request, `render.yaml` pinned no region so Render defaulted to Oregon while Neon is in `aws-us-east-2` (Ohio), and 19 × ~50 ms RTT ≈ 950 ms matches the measured gap. DESIGN.md §5 limit #1 dominating in production while invisible locally. The fix (`region: ohio`) is in review and **the re-measurement is still owed** |
-| Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 2 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` |
-| Red-team **held-out** set (20 reworded attacks, never used for tuning) | heuristics **5 %** before / 65 % after generic rules; cascade with every instruction classified **90 %** (old rules) / **100 %** (new rules) | — | `evals/redteam/heldout.jsonl`; the set is now seen, a fresh one is needed for the next honest number |
-| Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %**; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier |
+| End-to-end latency p50 / p95 / p99 in **production** (Render + Neon, real Gemini) | **2,273 / 25,660 / 25,660 ms**; 3 of 15 requests over 8 s. Platform overhead p50 **~860 ms** (range 767–1,126 ms) | p50 ≤ 3 s ✅, p99 ≤ 8 s ❌, overhead p99 ≤ 25 ms ❌ | Exact percentiles over `request_logs` on the deployment, n = 15 successful calls, 8 Oct — at that n the p95 and p99 are both just the slowest call, so read them as "the tail reached 25 s", not as a stable percentile. The cause is **cross-region database round trips, not CPU**: the pipeline makes ~19 database calls per request, `render.yaml` pinned no region so Render defaulted to Oregon while Neon is in `aws-us-east-2` (Ohio), and 19 × ~50 ms RTT ≈ 950 ms matches the measured gap. DESIGN.md §5 limit #1 dominating in production while invisible locally. `region: ohio` is in `render.yaml`; Render cannot move an existing service to another region, so the fix applies only to a service created from the blueprint in Ohio, and **the after-fix number has not been measured** |
+| Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 1.5 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 65 benign (15 of them editorial instructions naming document regions), `GUARDRAIL_LLM=off` |
+| Red-team **held-out v1** (20 reworded attacks; used during rule development) | heuristics **5 %** before / 65 % after rules written against it; cascade with every instruction classified **90 %** (old rules) / **100 %** (new rules) | — | `evals/redteam/heldout.jsonl`; seen by the rules, so not a generalisation number |
+| Red-team **held-out v2** (20 unseen attacks + 10 benign look-alikes) | heuristics only: catch **0 %** (0/20), FPR **0 %** (0/10); cascade: pending a classifier run | — | `evals/redteam/heldout_v2.jsonl`, reported by `make eval-redteam`, never gated or tuned against. The regex layer does not generalise to unseen paraphrases; the LLM classifier is the layer for that |
+| Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %** (on the 50/50 set, before the editorial cases); classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier |
 | Summarization faithfulness / coverage (LLM judge, 1–5) | `summarize_v1` **4.93 / 4.07**, hit rate 0.91 · `summarize_v2` **4.97 / 4.03**, hit rate 0.95 · **0 injection leaks** either way | ≥ 4.0 / ≥ 3.5 ✅ | 30-case Groq golden set, identical judge and rubric for both versions. v2 wins on faithfulness and key-point hit rate, v1 marginally on coverage, and v2 runs longer (15/30 over 120 words vs 7/30) at $0.00178 vs $0.00157 per request |
 
-Traffic-control micro-benchmarks: rate-limit check p50 747 µs / p99 1,404 µs on Postgres;
-fixed-window edge burst measured at exactly the 2.0× rpm bound D3 accepts; image 460 MB; local cold
-start 1.1 s.
+Traffic-control micro-benchmarks (`python -m scripts.bench_traffic`, Postgres, 8 Oct): rate-limit check
+p50 783 µs / p99 2,260 µs over 1,000 calls; fixed-window edge burst measured at exactly the 2.0× rpm bound
+D3 accepts. Docker image 467 MB (`docker images`); container start to a 200 from `/healthz` 1.7 s locally.
+Red-team and summarization evals re-run on the same day: catch 96 % / FPR 1.5 % / p50 0.08 ms, held-out
+v2 0 of 20, both gates PASS.
 
-**Not yet measured:** the burst against the deployment (needs a live URL and its `ADMIN_TOKEN`), and
+**Not yet measured:** the burst against the deployment (needs its `ADMIN_TOKEN` to set a test budget), and
 production latency *after* the region fix — the ~860 ms overhead row above is the before. Alert
-rules for these signals are in [`ops/alerts.yml`](ops/alerts.yml).
+rules for these signals are in [`ops/alerts.yml`](ops/alerts.yml); they apply wherever a Prometheus scrapes
+the API (the docker-compose stack; production has none).
 
 ## Observability
 
 `/metrics` exposes `ledgerllm_cost_microusd_total{tenant,model,purpose}`, `ledgerllm_tokens_total`,
 `ledgerllm_rejections_total{reason}`, `ledgerllm_llm_latency_seconds`, `ledgerllm_guardrail_verdicts_total`,
 `ledgerllm_feedback_total`, `ledgerllm_quality_score{prompt_version,dimension}`, plus HTTP request counts and
-latency histograms. Grafana dashboards are provisioned
-from `ops/grafana/dashboards/`. Logs are JSON with a `request_id` on every line; the `request_logs` (redacted)
+latency histograms. These are labelled by tenant id, so `/metrics` is not public: with `METRICS_TOKEN` set it needs
+that bearer token, and without one it is open only in dev/test (the docker-compose Prometheus). Grafana dashboards are provisioned
+from `ops/grafana/dashboards/`: an operational dashboard over Prometheus (docker-compose) and an admin dashboard
+over the database itself, which is what runs in production (`ledgerllm-admin` on Render, reading a Neon read
+replica; no Prometheus is deployed there, so the alert rules in `ops/alerts.yml` fire only where one scrapes the
+API). Logs are JSON with a `request_id` on every line; the `request_logs` (redacted)
 and `audit_events` tables explain every refusal after the fact.
 
 ## Security & compliance
 
 API keys are `llk_<prefix>_<secret}`; only the SHA-256 hash is stored, the raw key is shown once at
 creation/rotation. Admin routes need `Authorization: Bearer <ADMIN_TOKEN>` (constant-time compare).
-Every request/response is persisted redacted (`email`, `phone`, Luhn-validated `credit_card`, `aadhaar`,
-`pan`, `secret` incl. `sk-`/`AIza`/`llk_`, `ipv4` — specific → generic order, `evals/redaction/cases.jsonl`
-has 22 cases incl. Luhn/order-id negatives). Audit rows (`audit_events`) record tenant-caused refusals
-(`model_not_allowed`, `fetch_blocked`, `blocked_input`, `rate_limited`, `budget_exceeded`) plus key/tenant
-lifecycle; transport noise (`fetch_failed`) is request-log only. Audit `details` are PII-redacted.
+Every request/response is persisted redacted: `email`, `phone`, Luhn-validated `credit_card`, mod-97-validated
+`iban`, US `ssn`, `aadhaar`, `pan`, `ipv4`, parse-validated `ipv6`, street `address`, and `secret` (API keys incl.
+`sk-`/`AIza`/`llk_`, JWTs, GitHub and AWS tokens) — specific → generic order so the phone pattern never eats
+card or id digits; `evals/redaction/cases.jsonl` holds the cases incl. negatives that must survive. The same
+redactor runs on summaries at output moderation. Audit rows (`audit_events`) record tenant-caused refusals
+(`model_not_allowed`, `fetch_blocked`, `blocked_input`, `rate_limited`, `budget_exceeded`), key/tenant
+lifecycle, portal sign-up/sign-in, plan changes and payments; transport noise (`fetch_failed`) is request-log
+only. Audit `details` are PII-redacted.
 Query the trail newest-first: `GET /admin/audit?tenant_id=&event_type=&limit=50&before=`. Suspended
 tenants get 403 `tenant_suspended`; revoked keys get 401.
 
@@ -532,14 +630,36 @@ Docker image (`Dockerfile`) deployed as a Render web service via `render.yaml`, 
 (step-by-step runbook: [`docs/DEPLOY.md`](docs/DEPLOY.md)).
 Configuration is entirely environment variables: `DATABASE_URL`, `LLM_PROVIDER`, `LLM_API_KEY`,
 `ADMIN_TOKEN`, `GUARDRAILS_MODE`, `GUARDRAIL_LLM`, `QUALITY_SAMPLE_RATE`, `SUMMARIZE_PROMPT_VERSION`,
-`RESPONSE_CACHE_ENABLED`. Merges to `main` deploy automatically once CI
-and both eval gates pass. The app is stateless, so it scales horizontally without changes.
+`RESPONSE_CACHE_ENABLED`, `MAX_REQUEST_BYTES`, `METRICS_TOKEN`, `FORWARDED_ALLOW_IPS` (proxies whose
+`X-Forwarded-For` uvicorn trusts; `*` on Render), plus the optional `LLM_FALLBACK_*`, `GUARDRAIL_LLM_*`,
+`QUALITY_JUDGE_*`, `GRAFANA_URL` and per-provider `*_API_KEY` settings listed in `.env.example`. `GET /healthz`
+reports the deployed commit as `version` (`RENDER_GIT_COMMIT`, or `GIT_COMMIT`). A `main` commit deploys once its
+GitHub checks finish without failure. Tables are created on first start (`create_all` adds missing *tables* only;
+a new column on an existing table needs a manual `ALTER`). Budgets, limits, idempotency and the cache all live in
+Postgres, so a second instance is safe; only the judge queue and the classifier's verdict cache are per process.
+
+## Known gaps
+
+Stated here rather than left to be found:
+
+- **Judge calibration.** The five calibration rows have no human scores yet, so judge agreement is unreported.
+- **Eval model ≠ production model.** The judged golden-set runs use Qwen on Groq; Gemini's free tier cannot finish a
+  30-case run. A Gemini-specific regression would not show in CI.
+- **Unseen paraphrases.** The regex guardrail catches 0 of 20 held-out v2 attacks; the LLM classifier is the layer for
+  that and is off by default (`GUARDRAIL_LLM=off`).
+- **Production latency after the region fix** and the **burst against the deployment** are not measured.
+- **Platform overhead** misses the 25 ms target for documents above ~1k tokens (guardrail scan cost, table above).
+- **Fetching:** DNS rebinding between check and connect (D18); PDFs are decoded as text; client-rendered pages yield
+  nothing.
+- **Portal:** no e-mail verification or password reset; checkout is a mock processor.
+- **Production monitoring** is the admin Grafana over the database; Prometheus and the alert rules run only locally.
 
 ## Repository layout
 
 ```
 app/
   api/            routes: summarize (the pipeline), usage, feedback, admin, dashboard, health
+  portal/         tenant portal: pages, JSON API, password hashing, cookie sessions
   auth/           API keys, tenant resolution
   traffic/        rate limiting, idempotency, response cache
   billing/        pricing, budgets (reserve/settle), ledger, usage summaries

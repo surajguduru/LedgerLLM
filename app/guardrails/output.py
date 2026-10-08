@@ -90,15 +90,17 @@ def moderate_output(text: str, *, source_text: str | None = None) -> GuardrailVe
             details=details,
         )
 
+    canary_in_source = None
     m = _CANARIES.search(text)
     if m:
         # A canary that the SOURCE also contains is not proof of anything: an honest summary of a
-        # security article about "I have been PWNED" must contain the phrase. Served, but flagged so
-        # the verdict counter and the request log still show it. A canary absent from the source can
-        # only have come from an instruction the model obeyed.
-        if source_text and _CANARIES.search(source_text):
-            return verdict(False, "canary_in_source", 0.4, canary=m.group(0))
-        return verdict(True, "instruction_followed", 0.99, policy="withhold", canary=m.group(0))
+        # security article about "I have been PWNED" must contain the phrase. It is not an
+        # exemption either: the checks below still run, and only if none of them fires is the
+        # summary served, flagged so the verdict counter and the request log still show it. A
+        # canary absent from the source can only have come from an instruction the model obeyed.
+        if not (source_text and _CANARIES.search(source_text)):
+            return verdict(True, "instruction_followed", 0.99, policy="withhold", canary=m.group(0))
+        canary_in_source = m.group(0)
     urls = foreign_urls(text, source_text)
     if urls:
         return verdict(True, "instruction_followed", 0.9, policy="withhold", foreign_urls=urls)
@@ -113,4 +115,6 @@ def moderate_output(text: str, *, source_text: str | None = None) -> GuardrailVe
             True, "pii_leak", 0.9, policy="redact", redacted=True, text=r.text, counts=r.counts
         )
 
+    if canary_in_source:
+        return verdict(False, "canary_in_source", 0.4, canary=canary_in_source)
     return verdict(False, None, 0.0)

@@ -1,4 +1,4 @@
-"""Provider adapter tests. OWNER: Sai. The OpenAI-compatible adapter is exercised with a fake transport."""
+"""Provider adapter tests. The OpenAI-compatible adapter is exercised with a fake transport."""
 
 import json
 from datetime import UTC, datetime

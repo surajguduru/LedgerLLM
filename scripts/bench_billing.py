@@ -128,7 +128,7 @@ def costs() -> None:
     print(f"guardrail share of spend: {int(by_purpose.get('guardrail', 0)) / total:.1%}")
 
 
-def _check_then_call(db, tenant, plan, est_microusd):
+def _check_then_call(db, tenant, plan, est_microusd, *, now=None):
     """D2's rejected design: check `spent` against the limit, reserve nothing, settle afterwards.
     Every request in flight decides on the same stale `spent`."""
     period = budget.current_period()

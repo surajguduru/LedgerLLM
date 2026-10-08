@@ -147,3 +147,10 @@ def test_purge_removes_expired_rows(client, api_key, monkeypatch):
         monkeypatch.setattr(cache, "utcnow", lambda: utcnow() + timedelta(days=2))
         assert cache.purge_expired(db) == 1
         db.commit()
+
+
+def test_different_title_misses(client, api_key):
+    # the title is part of the prompt, so a summary cached under one title is not another title's
+    summarize(client, api_key, title="Quarterly report")
+    assert summarize(client, api_key, title="Quarterly report").json()["usage"]["cached"] is True
+    assert summarize(client, api_key, title="Annual report").json()["usage"]["cached"] is False

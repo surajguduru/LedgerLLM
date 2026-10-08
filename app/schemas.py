@@ -1,13 +1,17 @@
-"""Pydantic request/response models — the public API contract. Changes here need a PR comment to Suraj."""
+"""Pydantic request/response models — the public API contract. Changes here need a PR note (CONTRIBUTING.md)."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, HttpUrl, model_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 Style = Literal["bullets", "paragraph", "tldr"]
+
+# Upper bound on a tenant's monthly budget override. Also keeps the value finite and inside the
+# BIGINT micro-USD column: 1e30 or Infinity would otherwise fail in the database as a 500.
+MAX_BUDGET_OVERRIDE_USD = 1_000_000
 
 
 class SummarizeRequest(BaseModel):
@@ -22,6 +26,26 @@ class SummarizeRequest(BaseModel):
     model: str | None = Field(
         None, description="Override model; must be allowed by the tenant's plan"
     )
+
+    @field_validator("text", "title", "instructions", "model")
+    @classmethod
+    def _encodable(cls, value: str | None) -> str | None:
+        # JSON allows a lone surrogate escape (\ud800) that Python decodes but cannot encode as UTF-8;
+        # left in, it fails later (request hashing, the database) as a 500 instead of a 422 here.
+        if value is not None:
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("contains invalid Unicode (an unpaired surrogate)") from exc
+        return value
+
+    @field_validator("text")
+    @classmethod
+    def _has_content(cls, value: str | None) -> str | None:
+        # Same rule as a fetched page with nothing in it: whitespace alone would be billed for nothing.
+        if value is not None and value != "" and not value.strip():
+            raise ValueError("no extractable text (only whitespace)")
+        return value
 
     @model_validator(mode="after")
     def _exactly_one_source(self) -> SummarizeRequest:
@@ -107,7 +131,9 @@ class UsageSummary(BaseModel):
 class CreateTenantRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     plan: str = "free"
-    budget_override_usd: float | None = Field(None, ge=0)
+    budget_override_usd: float | None = Field(
+        None, ge=0, le=MAX_BUDGET_OVERRIDE_USD, allow_inf_nan=False
+    )
     key_name: str = "default"
 
 
@@ -149,7 +175,9 @@ class CreateKeyResponse(BaseModel):
 class UpdateTenantRequest(BaseModel):
     plan: str | None = None
     status: str | None = None
-    budget_override_usd: float | None = Field(None, ge=0)
+    budget_override_usd: float | None = Field(
+        None, ge=0, le=MAX_BUDGET_OVERRIDE_USD, allow_inf_nan=False
+    )
 
 
 class AuditOut(BaseModel):

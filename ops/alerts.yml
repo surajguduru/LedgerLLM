@@ -1,4 +1,4 @@
-# Prometheus alert rules. OWNER: Yashraj.
+# Prometheus alert rules.
 #
 # Loaded by ops/prometheus.yml. These are the three things that would make me open the dashboard at
 # night, phrased against the targets in docs/DESIGN.md section 1 rather than round numbers.

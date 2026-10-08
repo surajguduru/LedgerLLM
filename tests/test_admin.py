@@ -1,4 +1,4 @@
-"""Admin API. OWNER: Loukik."""
+"""Admin API."""
 
 import pytest
 
