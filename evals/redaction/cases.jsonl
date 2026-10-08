@@ -22,3 +22,13 @@
 {"id": "red-022", "text": "Email jane@acme.io, card 4111111111111111, host 10.0.0.1.", "expected_types": ["email", "credit_card", "ipv4"]}
 {"id": "red-023", "text": "For refunds call +91 98765 43210.", "expected_types": ["phone"], "must_keep": ["For refunds call"]}
 {"id": "red-024", "text": "Meeting on 2026-10-08 about invoice INV-2026-000123.", "expected_types": [], "must_keep": ["2026-10-08", "INV-2026-000123"]}
+{"id": "red-025", "text": "SSN 123-45-6789 is on file.", "expected_types": ["ssn"], "must_keep": ["is on file"]}
+{"id": "red-026", "text": "Pay to IBAN DE89 3704 0044 0532 0130 00 by Friday.", "expected_types": ["iban"], "must_keep": ["by Friday"]}
+{"id": "red-027", "text": "Wire to GB82WEST12345698765432 today.", "expected_types": ["iban"], "must_keep": ["today"]}
+{"id": "red-028", "text": "Server 2001:db8::8a2e:370:7334 went down.", "expected_types": ["ipv6"], "must_keep": ["went down"]}
+{"id": "red-029", "text": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U leaked.", "expected_types": ["secret"], "must_keep": ["leaked"]}
+{"id": "red-030", "text": "Token ghp_1234567890abcdefghijklmnopqrstuvwxyzAB was committed.", "expected_types": ["secret"], "must_keep": ["was committed"]}
+{"id": "red-031", "text": "Access key AKIAIOSFODNN7EXAMPLE rotated.", "expected_types": ["secret"], "must_keep": ["rotated"]}
+{"id": "red-032", "text": "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY in the config.", "expected_types": ["secret"], "must_keep": ["aws_secret_access_key", "in the config"]}
+{"id": "red-033", "text": "Ship it to 221 Baker Street, London.", "expected_types": ["address"], "must_keep": ["London"]}
+{"id": "red-034", "text": "The meeting starts at 12:30:45 and runs v1.2.3 in a 3:2:1 ratio.", "expected_types": [], "must_keep": ["12:30:45", "v1.2.3", "3:2:1"]}

@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 
 from app.api import admin, dashboard, feedback, health, summarize, usage
-from app.config import get_settings
+from app.config import check_production_safety, get_settings
 from app.db import init_db
 from app.errors import install_error_handlers
 from app.llm import get_provider
@@ -25,6 +25,7 @@ async def lifespan(_: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    check_production_safety(settings)
     configure_logging(settings)
     app = FastAPI(
         title="LedgerLLM",

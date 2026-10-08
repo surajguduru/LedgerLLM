@@ -8,6 +8,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 ROOT = Path(__file__).resolve().parent.parent
 
 
+DEFAULT_ADMIN_TOKEN = "dev-admin-token-change-me"
+MIN_ADMIN_TOKEN_CHARS = 24
+
+
 class Settings(BaseSettings):
     """All runtime configuration. Values come from env vars, then .env, then these defaults."""
 
@@ -38,7 +42,7 @@ class Settings(BaseSettings):
     llm_fallback_timeout_s: float | None = None  # empty: llm_timeout_s
 
     # Admin
-    admin_token: str = "dev-admin-token-change-me"
+    admin_token: str = DEFAULT_ADMIN_TOKEN
 
     # Tenant portal (/app): session lifetime, and whether the cookie is HTTPS-only. None = secure
     # everywhere except APP_ENV dev/test, where the app is served over plain http://localhost.
@@ -74,6 +78,21 @@ class Settings(BaseSettings):
     # URL fetching
     fetch_timeout_s: float = 10.0
     fetch_max_bytes: int = 2_000_000
+
+
+def check_production_safety(s: Settings) -> None:
+    """Refuse to start outside dev/test with an admin token anyone can read in this repository.
+
+    /admin/* creates tenants and mints API keys; the default token is public, so a deployment that
+    forgot ADMIN_TOKEN would hand that to anyone. Render's blueprint generates one (render.yaml).
+    """
+    if s.app_env in ("dev", "test"):
+        return
+    if s.admin_token == DEFAULT_ADMIN_TOKEN or len(s.admin_token) < MIN_ADMIN_TOKEN_CHARS:
+        raise RuntimeError(
+            f"APP_ENV={s.app_env}: ADMIN_TOKEN is the public default or shorter than "
+            f"{MIN_ADMIN_TOKEN_CHARS} characters; set a random one (e.g. `openssl rand -hex 32`)"
+        )
 
 
 @lru_cache
