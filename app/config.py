@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     guardrail_llm: str = "off"
     guardrail_llm_model: str = "gemini-3.5-flash-lite"
     guardrail_llm_cache_size: int = 4096
+    # Which instructions the classifier sees when it is on: "uncertain" (heuristic score in the band)
+    # or "always" (every non-empty instruction; ~$0.0001 each, cached by text). Documents are always
+    # banded: they are long and the heuristics are rarely unsure about them.
+    guardrail_llm_instructions: str = "always"
 
     # Online quality sampling: share of successful summaries judged in the background (0 disables).
     # The judge runs on the platform's key and is paced for the Gemini free tier (~10 RPM).

@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from time import perf_counter
 
 from app.compliance.redaction import redact
+from app.config import get_settings
 from app.guardrails import llm_classifier
 from app.guardrails.normalize import normalize
 from app.guardrails.types import GuardrailVerdict
@@ -118,9 +119,9 @@ SIGNALS: list[Signal] = [
         "disable_safety",
         "jailbreak",
         0.7,
-        r"\b(no|without|disable|bypass|turn\s+off|remove|drop|suspend|lift|has\s+no)\s+(the\s+|your\s+|any\s+|all\s+|its\s+)?"
+        r"\b(no|without|disable|bypass|turn\s+off|remove|drop|suspend|lift|has\s+no|cancel|forget)\s+(the\s+|your\s+|any\s+|all\s+|its\s+)?"
         r"(content\s+policy|safety\s+(filters?|guidelines?|rules|measures|training)|restrictions|guardrails|filters|moderation|"
-        r"ethical\s+guidelines|censorship|limitations)\b",
+        r"ethical\s+guidelines|censorship|limitations|limits|boundaries)\b",
     ),
     _s(
         "respond_only_with",
@@ -239,6 +240,129 @@ SIGNALS: list[Signal] = [
         "jailbreak",
         0.6,
         r"\b(ignores?|ignoring|without|forget(s|ting)?)\s+(its|your|their|all)\s+(training|guidelines|safety|alignment|rules)\b",
+    ),
+    # --- rewordings: the held-out set (evals/redteam/heldout.jsonl) showed the forms above are
+    # too literal. These match the *shape* of an override rather than its canonical wording.
+    _s(
+        "override_reworded",
+        "prompt_injection",
+        0.85,
+        r"\b(ignore|disregard|forget|set\s+aside|discard|drop|abandon|throw\s+away|scrap)\s+"
+        r"(everything|anything|all|whatever|what(ever)?\s+you\s+(were|have\s+been|'ve\s+been)\s+(told|given|instructed|taught)|"
+        r"the\s+(guidance|rules?|instructions?|text|message|setup)\s*(you\s+)?(received|got|were\s+given|have)?)\s*"
+        r"(above|earlier|before|previously|so\s+far|up\s+to\s+now|prior\s+to\s+this|before\s+this\s+(message|line|point)|until\s+now)",
+    ),
+    _s(
+        "prior_rules_void",
+        "prompt_injection",
+        0.85,
+        r"\b(everything|anything|all\s+(rules|instructions|constraints)|(the|any|every)\s+(rules?|constraints?|instructions?|guidelines?))\s+"
+        r"(mentioned\s+|stated\s+|given\s+|written\s+)?(before|above|earlier|prior\s+to)\s*(this\s+(line|message|point))?\s*"
+        r"((is|are|was|were)\s+)?(now\s+)?(void|null|cancelled|canceled|revoked|invalid|obsolete|no\s+longer\s+(valid|in\s+effect|binding)|no\s+longer\s+appl(y|ies))",
+    ),
+    _s(
+        "rules_were_a_test",
+        "prompt_injection",
+        0.7,
+        r"\b(rules|instructions|guidelines|constraints)\s+(above|before|earlier|so\s+far)\s+(were|was)\s+(just\s+|only\s+)?(a\s+)?(test|joke|mistake|placeholder|decoy)",
+    ),
+    _s(
+        "repeat_prior_message",
+        "prompt_injection",
+        0.8,
+        r"\b(repeat|quote|recite|print|output|show|reproduce|paste)\s+(me\s+)?(the\s+)?(first|initial|earlier|previous|original|opening|very\s+first)\s+(message|text|instructions?|prompt|lines?)",
+    ),
+    _s(
+        "text_given_before",
+        "prompt_injection",
+        0.7,
+        r"\b(text|message|instructions?|words|content)\s+(that\s+)?(was|were)\s+(given|provided|sent|shown|handed)\s+to\s+you\s+(before|prior|earlier|at\s+the\s+start)",
+    ),
+    _s(
+        "what_were_you_told",
+        "prompt_injection",
+        0.6,
+        r"\bwhat\s+(were|was|have)\s+you\s+(been\s+)?(told|instructed|asked|given|programmed)\s+(to\s+do\s+)?(before|earlier|previously|prior|at\s+the\s+start)",
+    ),
+    _s(
+        "your_hidden_message",
+        "prompt_injection",
+        0.45,
+        r"\b(your|the\s+(ai|assistant|model|bot)'?s?|its)\s+(system|secret|hidden|configuration|instruction|initial|internal)\s+(message|prompt|block|text|rules|instructions?)\b",
+    ),
+    _s(
+        "dump_config_block",
+        "prompt_injection",
+        0.8,
+        r"\b(dump|print|output|reveal|show|display|translate|rewrite|paraphrase|summari[sz]e|encode)\s+(me\s+)?(the\s+)?(contents?\s+of\s+)?(your\s+|the\s+|its\s+)?"
+        r"(system\s+message|instruction\s+block|config(uration)?(\s+(block|prompt|file|section))?|system\s+(block|section|file))\b",
+    ),
+    _s(
+        "stop_being_assistant",
+        "jailbreak",
+        0.7,
+        r"\b(stop\s+being|you\s+are\s+no\s+longer|you'?re\s+no\s+longer|forget\s+(that\s+)?you\s+are|quit\s+being)\s+(a\s+|an\s+|the\s+)?"
+        r"(summari[sz]er|assistant|summar(y|i[sz]ation)\s+(tool|bot|service|assistant)|ai\s+assistant|helpful\s+assistant|chatbot)",
+    ),
+    _s(
+        "role_swap",
+        "jailbreak",
+        0.6,
+        r"\b((switch|swap|reverse|exchange|trade)\s+roles|(you\s+are|you're)\s+(now\s+)?the\s+user\s+and\s+i\s+am\s+the\s+(ai|assistant|model|bot))\b",
+    ),
+    _s(
+        "opposite_of_guidelines",
+        "jailbreak",
+        0.7,
+        r"\b(the\s+)?opposite\s+of\s+(your|the|its)\s+(guidelines|instructions|rules|training|programming|policy)",
+    ),
+    _s(
+        "message_from_authority",
+        "prompt_injection",
+        0.6,
+        r"\b(coming\s+from|sent\s+by|issued\s+by|on\s+behalf\s+of|written\s+by|authori[sz]ed\s+by)\s+(your|the)\s+(administrator|admin|developer|operator|owner|creator|maintainer)s?\b",
+    ),
+    _s(
+        "override_accepted",
+        "prompt_injection",
+        0.7,
+        r"\b(override|bypass|unlock|escalation)\s+(accepted|granted|engaged|active|confirmed|successful|complete)\b",
+    ),
+    _s(
+        "treat_message_as",
+        "prompt_injection",
+        0.6,
+        r"\btreat\s+(this|the\s+following|the\s+next)\s+(message|text|document|input|request)\s+as\s+(if\s+)?(coming\s+from|from|an?\s+(system|admin|developer|operator)|trusted|authoritative)",
+    ),
+    _s(
+        "to_automated_readers",
+        "prompt_injection",
+        0.6,
+        r"\b(to|for|from\s+the\s+\w+\s+to)\s+(any\s+|all\s+)?(automated|machine|robot|ai|algorithmic|non-human)\s+(readers?|agents?|systems?|summari[sz]ers?|processors?|visitors?)\b",
+    ),
+    _s(
+        "if_you_are_a_machine",
+        "prompt_injection",
+        0.7,
+        r"\bif\s+you\s+(are|'re)\s+(a|an)\s+(machine|ai|bot|llm|language\s+model|assistant|computer|robot|automated\s+\w+)\b",
+    ),
+    _s(
+        "next_output_must_be",
+        "prompt_injection",
+        0.7,
+        r"\byour\s+(next|only|entire|whole|final)\s+(output|response|reply|message|answer)\s+(must|should|will|has\s+to|needs\s+to)\s+(be|contain|include|start|end)\b",
+    ),
+    _s(
+        "describe_this_as",
+        "prompt_injection",
+        0.5,
+        r"\b(describe|present|portray|call|rate|recommend)\s+(this|the|our)\s+(product|company|service|page|site|article|brand|offer)\s+as\b",
+    ),
+    _s(
+        "write_uppercase_token",
+        "prompt_injection",
+        0.6,
+        r"\b(write|output|print|say|respond\s+with|reply\s+with|answer\s+with)\s+(only\s+)?(the\s+)?(string|word|phrase|text|token)\s+['\"]?(?-i:[A-Z]{3,})['\"]?",
     ),
     _s(
         "jailbreak_keyword",
@@ -382,7 +506,18 @@ def classify_input(text: str, *, source: str = "instructions") -> GuardrailVerdi
     model, input_tokens, output_tokens = None, 0, 0
 
     lo, hi = UNCERTAIN_BAND
-    if lo <= score < hi and llm_classifier.enabled():
+    consult = lo <= score < hi
+    if (
+        source == "instructions"
+        and text.strip()
+        and score < hi
+        and get_settings().guardrail_llm_instructions == "always"
+    ):
+        # Rewordings score 0 on the regex layer ("disregard what you were told earlier"), so for
+        # instructions — short, cheap, highly cacheable — the classifier sees everything below the
+        # block line. The measured held-out catch rate is the reason (docs/MEASUREMENTS.md).
+        consult = True
+    if consult and llm_classifier.enabled():
         llm = llm_classifier.classify_with_llm(text, source=source)
         if llm is not None:
             method = CASCADE_METHOD

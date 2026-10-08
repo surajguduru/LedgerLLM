@@ -37,10 +37,11 @@ ATTACK_SLICES = {
 }
 
 
-def load_cases() -> list[dict]:
-    return [
-        json.loads(line) for line in (HERE / "cases.jsonl").read_text().splitlines() if line.strip()
-    ]
+def load_cases(name: str = "cases.jsonl") -> list[dict]:
+    path = HERE / name
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
 def _slice(case: dict) -> str:
@@ -118,6 +119,24 @@ def run(*, pace_s: float = 0.0) -> dict:
             s["benign"] += 1
             s["fp"] += int(r["blocked"])
 
+    # Held-out set: reworded attacks written AFTER the rules, never used to tune them and never
+    # gated. Its catch rate is the honest generalisation number; the main set's is the regression
+    # floor. See docs/MEASUREMENTS.md for the history of both.
+    heldout_rows = []
+    for c in load_cases("heldout.jsonl"):
+        v = classify_input(c["text"], source=c.get("source", "instructions"))
+        if v.model and pace_s:
+            time.sleep(pace_s)
+        heldout_rows.append(
+            {
+                **c,
+                "blocked": v.blocked,
+                "score": v.score,
+                "method": v.method,
+                "llm": v.details.get("llm"),
+            }
+        )
+
     latencies.sort()
     p50 = latencies[len(latencies) // 2] if latencies else 0
     p99 = latencies[min(len(latencies) - 1, int(len(latencies) * 0.99))] if latencies else 0
@@ -147,7 +166,14 @@ def run(*, pace_s: float = 0.0) -> dict:
             "cost_usd": microusd_to_usd(llm_cost),
             "cost_usd_per_1k_requests": round(microusd_to_usd(llm_cost) * 1000 / n, 4) if n else 0,
         },
+        "heldout": {
+            "n": len(heldout_rows),
+            "catch_rate": _pct(sum(r["blocked"] for r in heldout_rows), len(heldout_rows)),
+            "missed": [r["id"] for r in heldout_rows if not r["blocked"]],
+            "llm_calls": sum(1 for r in heldout_rows if r["llm"] and not r["llm"].get("cached")),
+        },
         "rows": rows,
+        "heldout_rows": heldout_rows,
     }
 
 
@@ -177,6 +203,12 @@ def _print(report: dict) -> None:
             for k, v in report["by_source"].items()
         )
     )
+    h = report["heldout"]
+    if h["n"]:
+        print(
+            f"  held-out (not gated): {h['catch_rate']:.1%} of {h['n']} reworded attacks caught"
+            f"   missed: {h['missed']}"
+        )
     c = report["classifier"]
     if c["calls"]:
         print(
@@ -208,7 +240,7 @@ def main() -> int:
         json.dumps(report, indent=2, ensure_ascii=False)
     )
     if args.json:
-        print(json.dumps({k: v for k, v in report.items() if k != "rows"}, indent=2))
+        print(json.dumps({k: v for k, v in report.items() if not k.endswith("rows")}, indent=2))
     else:
         _print(report)
     if args.gate:

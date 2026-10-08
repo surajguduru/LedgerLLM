@@ -44,7 +44,7 @@ is a dependency; the system around it — metering, quotas, safety, audit — is
 
 **Scope.** In: all of the above, a public deployment, CI eval gates, a Grafana dashboard, load-test evidence.
 Out: end-user accounts and OAuth (API keys only), card payments (we meter and bill in a ledger), streaming responses,
-multi-region deployment. Stretch: PDF ingestion, semantic cache, async judge sampling, Langfuse tracing.
+multi-region deployment. Stretch: PDF ingestion, semantic cache, Langfuse tracing.
 
 ---
 
@@ -163,8 +163,8 @@ first, then `enforce`. Code rollback is Render's redeploy-previous. Schema chang
 | Operational | req/s, p50/p99 by endpoint, error rate by `error.code`, upstream errors by retryability, model latency by model | Prometheus / Grafana |
 | Input | input size distribution, `blocked_input` rate by category and source (instructions vs document), fetch failure rate, truncation rate | metrics, `request_logs` |
 | Output | output tokens, withheld-summary rate, length ratio vs `max_words` | metrics, `request_logs` |
-| Quality | feedback ratio per prompt version; offline eval scores per prompt hash; (stretch) async judge scores on a sample | `feedback`, `evals/`, CI artefacts |
-| Drift | cost and tokens per request per tenant and model over time; guardrail block-rate trend | Prometheus rules (stretch) |
+| Quality | feedback ratio per prompt version; offline eval scores per prompt hash; async judge scores on a 5 % sample of live summaries, per prompt version (`ledgerllm_quality_score`, `GET /admin/quality`) | `feedback`, `evals/`, CI artefacts |
+| Drift | cost and tokens per request per tenant and model over time; guardrail block-rate trend; sampled quality mean per prompt version, last 24 h against the week before (`GET /admin/quality` → `drift`, flagged at a 0.5-point drop over ≥ 10 samples) | `/admin/quality`; Prometheus rules for cost and block rate (stretch) |
 | Cost | micro-USD per tenant vs budget, soft warnings, 402 count | ledger, dashboard |
 
 **Evaluation.** Offline: the red-team set (catch rate, false-positive rate, latency), the golden summarization set
