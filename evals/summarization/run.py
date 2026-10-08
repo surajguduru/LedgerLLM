@@ -1,10 +1,17 @@
 """Summarization golden-set eval.
 
-    python -m evals.summarization.run --provider mock --gate      # programmatic checks only (CI, free)
-    python -m evals.summarization.run --provider gemini --gate    # + LLM-as-judge (needs LLM_API_KEY; free tier)
+    python -m evals.summarization.run --provider mock --gate      # plumbing gate (CI, every PR, free)
+    python -m evals.summarization.run --provider gemini --gate    # quality gate with the LLM judge (LLM_API_KEY)
+      [--model M] [--judge-model J] [--prompt-version summarize_v2] [--rpm 8] [--out path.json]
 
-OWNER: Sai. Grow golden.jsonl to ~30 hand-written documents (store the TEXT, not just URLs — URLs drift),
-finish the judge prompt, calibrate it against a few human-labelled examples, and log runs with the prompt hash.
+Each golden.jsonl case (the document TEXT, not a URL, so it cannot drift) is summarised through the real
+feature code, then checked programmatically (key-point hit rate, length ratio, must_not_include leaks) and,
+with a real provider, scored by an LLM judge on another model of the same family (D21): a rubric prompt, strict
+JSON validation, one retry, and `judge_error` for cases that still fail. Calls are paced per model for the free
+tier and back off on 429/5xx. thresholds.yaml has a `mock` section (the mock cannot summarise, so it gates
+plumbing only) and a `model` section (the quality gate). Results go to results/last_<provider>.json with run
+metadata (prompt version@hash, models, tokens, wall time, means); results/last_gemini.json is committed.
+calibration.jsonl + agreement.py measure how far the judge agrees with hand scores.
 """
 
 from __future__ import annotations
