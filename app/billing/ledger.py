@@ -6,6 +6,8 @@ reservation is, D2) can be measured from the ledger alone.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from app.models import UsageLedger
@@ -27,6 +29,7 @@ def book(
     latency_ms: int,
     status: str = "ok",
     estimate_microusd: int | None = None,
+    created_at: datetime | None = None,
 ) -> UsageLedger:
     row = UsageLedger(
         tenant_id=tenant_id,
@@ -43,5 +46,10 @@ def book(
         status=status,
         estimate_microusd=estimate_microusd,
     )
+    if created_at is not None:
+        # The pipeline passes the time it reserved the budget, so every row of a request lands in
+        # the same month as the spend it settles — even a request that runs across midnight on the
+        # last day of the month.
+        row.created_at = created_at
     db.add(row)
     return row

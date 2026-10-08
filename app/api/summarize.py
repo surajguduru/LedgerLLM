@@ -14,6 +14,7 @@ the stream owner whose stage is affected (see CONTRIBUTING.md).
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from time import perf_counter
 
 import structlog
@@ -154,6 +155,7 @@ def _book_guardrail(
     request_id: str,
     period: str,
     stage: str,
+    booked_at: datetime | None = None,
 ) -> int:
     """If a guardrail verdict came from a paid model call, bill it to the tenant. Returns micro-USD."""
     if not verdict.model or (verdict.input_tokens + verdict.output_tokens) == 0:
@@ -172,6 +174,7 @@ def _book_guardrail(
         price_version=load_prices().version,
         prompt_version=f"guardrail:{stage}:{verdict.method}",
         latency_ms=verdict.latency_ms,
+        created_at=booked_at,
     )
     budget.settle(
         db, auth.tenant.id, period, 0, cost
@@ -424,7 +427,7 @@ def _pipeline(
                 period=period,
                 limit_usd=microusd_to_usd(limit),
                 spent_usd=microusd_to_usd(spent),
-                remaining_usd=microusd_to_usd(max(0, limit - spent)),
+                remaining_usd=microusd_to_usd(max(0, limit - committed)),
                 warning=warning,
             ),
             guardrails=GuardrailsInfo(mode=settings.guardrails_mode, input={}, output={}),
@@ -500,7 +503,8 @@ def _pipeline(
     est_microusd = sum(
         max(estimate_cost_microusd(m, est_in, cap) for m in chain) for est_in, cap in calls
     )
-    decision = budget.reserve(db, tenant, plan, est_microusd)
+    reserved_at = datetime.now(UTC)
+    decision = budget.reserve(db, tenant, plan, est_microusd, now=reserved_at)
     budget_headers = {
         "X-Budget-Limit-USD": f"{microusd_to_usd(decision.limit_microusd):.6f}",
         "X-Budget-Spent-USD": f"{microusd_to_usd(decision.spent_microusd):.6f}",
@@ -558,6 +562,7 @@ def _pipeline(
             auth=auth,
             request_id=request_id,
             period=decision.period,
+            booked_at=reserved_at,
             stage="input",
         )
         if not verdict_in.blocked:
@@ -568,6 +573,7 @@ def _pipeline(
                 auth=auth,
                 request_id=request_id,
                 period=decision.period,
+                booked_at=reserved_at,
                 stage="input",
             )
             if verdict_doc.score >= verdict_in.score:
@@ -655,6 +661,7 @@ def _pipeline(
         auth=auth,
         request_id=request_id,
         period=decision.period,
+        booked_at=reserved_at,
         stage="output",
     )
     withheld = _run_guardrail(
@@ -696,6 +703,7 @@ def _pipeline(
             prompt_version=prompt_version + s.ledger_suffix,
             latency_ms=r.latency_ms,
             estimate_microusd=est_microusd if i == 0 else None,
+            created_at=reserved_at,
         )
         metrics.record_booking(
             tenant=tenant.id,
@@ -705,11 +713,14 @@ def _pipeline(
             output_tokens=r.output_tokens,
             cost_microusd=cost,
         )
-    db.info.pop("open_reservation", None)
-    budget.settle(db, tenant.id, decision.period, est_microusd, actual_microusd)
+    # Not committed here: spend, ledger rows, request log, cache entry and idempotency record commit
+    # together below, so a failure in any of them bills nothing and the retry runs exactly once.
+    budget.settle(db, tenant.id, decision.period, est_microusd, actual_microusd, commit=False)
 
     # 10. response, log, audit, idempotency store ----------------------------------------------
     spent_after = decision.spent_microusd + actual_microusd + guardrail_cost
+    # Same definition as /v1/usage: limit - spent - reserved, where our own reservation is gone.
+    others_reserved = max(0, decision.reserved_microusd - est_microusd)
     body = SummarizeResponse(
         request_id=request_id,
         summary=summary_text,
@@ -735,7 +746,9 @@ def _pipeline(
             period=decision.period,
             limit_usd=microusd_to_usd(decision.limit_microusd),
             spent_usd=microusd_to_usd(spent_after),
-            remaining_usd=microusd_to_usd(max(0, decision.limit_microusd - spent_after)),
+            remaining_usd=microusd_to_usd(
+                max(0, decision.limit_microusd - spent_after - others_reserved)
+            ),
             warning=decision.warning,
         ),
         guardrails=GuardrailsInfo(
@@ -774,14 +787,6 @@ def _pipeline(
             ),
             ttl_s=plan.cache_ttl_s,
         )
-    if not withheld:
-        maybe_sample(
-            request_id=request_id,
-            tenant_id=tenant.id,
-            prompt_version=prompt_version,
-            source_text=page.text,
-            summary=result.text,
-        )
     if idempotency_key:
         idempotency.store(
             db,
@@ -792,6 +797,15 @@ def _pipeline(
             response_json=body_json,
         )
     db.commit()
+    db.info.pop("open_reservation", None)  # settled and committed: nothing left to release
+    if not withheld:
+        maybe_sample(
+            request_id=request_id,
+            tenant_id=tenant.id,
+            prompt_version=prompt_version,
+            source_text=page.text,
+            summary=result.text,
+        )
     log.info(
         "summarize_ok",
         tenant=tenant.id,

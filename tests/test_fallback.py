@@ -241,9 +241,9 @@ def spy_reserve(monkeypatch):
         seen["estimates"][model] = real_estimate(model, *args)
         return seen["estimates"][model]
 
-    def reserve(db, tenant, plan, est):
+    def reserve(db, tenant, plan, est, **kw):
         seen["reserved"].append(est)
-        return real_reserve(db, tenant, plan, est)
+        return real_reserve(db, tenant, plan, est, **kw)
 
     monkeypatch.setattr(pipeline, "estimate_cost_microusd", estimate)
     monkeypatch.setattr(pipeline.budget, "reserve", reserve)
