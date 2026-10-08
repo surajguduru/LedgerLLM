@@ -232,7 +232,7 @@ def test_usage_needs_a_session(client):
 
 
 @pytest.mark.parametrize(
-    "path", ["/app/login", "/app/signup", "/app", "/app/keys", "/app/playground"]
+    "path", ["/app/login", "/app/signup", "/app", "/app/keys", "/app/playground", "/app/billing"]
 )
 def test_pages_render(client, path):
     r = client.get(path)

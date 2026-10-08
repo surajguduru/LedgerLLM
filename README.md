@@ -134,7 +134,7 @@ Headers on every response: `X-Request-ID`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 | `GET /v1/usage/statement.csv?period=YYYY-MM` | itemised statement: every ledger row of the month plus a `TOTAL` line that equals the bill |
 | `POST /v1/feedback` | thumbs up/down on a `request_id` |
 | `GET /app` | **tenant portal**: sign up / sign in, manage API keys, usage per key, daily and monthly spend |
-| `/app/api/*` | portal JSON API (session cookie): `signup`, `login`, `logout`, `me`, `keys` (create, `/{id}/revoke`, `/{id}/rotate`), `models`, `playground/summarize`, `usage?period=`, `statement.csv` |
+| `/app/api/*` | portal JSON API (session cookie): `signup`, `login`, `logout`, `me`, `keys` (create, `/{id}/revoke`, `/{id}/rotate`), `models`, `playground/summarize`, `usage?period=`, `statement.csv`, `billing`, `billing/plan` |
 | `GET /dashboard` | usage/billing page for a tenant (paste a key) |
 | `POST /admin/tenants`, `POST /admin/tenants/{id}/keys`, `GET /admin/tenants` | tenant and key management (`Authorization: Bearer $ADMIN_TOKEN`) |
 | `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus, health, OpenAPI |
@@ -156,6 +156,9 @@ free plan, its first API key (shown once) and a session. Signed in, they can:
   pipeline (rate limit, budget, guardrails, cache, ledger), billed to the chosen key
 - see monthly totals, remaining budget, daily spend stacked by key, spend share per key, recent calls and spend by model,
   for this month or any of the last six, and download the itemised CSV statement
+- change plan on the **Billing** page (`/app/billing`): compare plans, upgrade or downgrade at once, pay a paid plan's
+  monthly price through a **mock** checkout (any Luhn-valid card with a future expiry, e.g. `4242 4242 4242 4242`;
+  always succeeds, stores only brand and last four digits), and see the payment history. Decision D27
 
 Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies whose token is stored only as a sha256;
 every state change is a same-origin JSON POST; sign-in is throttled per e-mail and per IP; someone else's key id is

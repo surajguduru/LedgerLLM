@@ -1,4 +1,5 @@
-"""Tenant portal JSON API under /app/api: sign-up, sign-in, self-service keys and usage (D24).
+"""Tenant portal JSON API under /app/api: sign-up, sign-in, self-service keys, usage (D24) and
+plan changes with mock checkout (D27).
 
 Every state-changing route is a JSON POST guarded by require_same_origin (CSRF); everything except
 sign-up and sign-in needs a session (current_user). Key ids are always checked against the signed-in
@@ -20,7 +21,7 @@ from sqlalchemy.orm import Session
 from app.api.summarize import summarize as run_summarize
 from app.auth import keys
 from app.auth.dependency import AuthContext
-from app.billing import budget
+from app.billing import budget, payments
 from app.billing.pricing import load_prices
 from app.billing.usage import daily_by_key, statement_csv, summarize_usage, usage_by_key
 from app.compliance import audit as audit_events
@@ -28,9 +29,10 @@ from app.compliance.audit import audit
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.errors import ApiError
-from app.models import ApiKey, Tenant, User, utcnow
+from app.models import ApiKey, Payment, Tenant, User, utcnow
 from app.observability import metrics
 from app.observability.logging import note_tenant
+from app.plans import Plan, load_plans, microusd_to_usd
 from app.portal.passwords import DUMMY_HASH, MIN_LENGTH, hash_password, verify_password
 from app.portal.sessions import (
     PortalContext,
@@ -72,6 +74,19 @@ class PlaygroundRequest(SummarizeRequest):
 
 class KeyRequest(BaseModel):
     name: str = Field("default", min_length=1, max_length=100)
+
+
+class CardIn(BaseModel):
+    name: str = Field(..., max_length=200)
+    number: str = Field(..., max_length=30)
+    exp_month: int
+    exp_year: int
+    cvc: str = Field(..., max_length=4)
+
+
+class PlanChangeRequest(BaseModel):
+    plan: str = Field(..., max_length=50)
+    card: CardIn | None = Field(None, description="required when the new plan has a price")
 
 
 def _bucket(kind: str, value: str) -> str:
@@ -380,3 +395,139 @@ def playground_summarize(
         idempotency_key=None,
         cache_control="no-cache" if payload.bypass_cache else None,
     )
+
+
+# --- billing (D27) -----------------------------------------------------------------------------
+
+
+def _plan_out(plan: Plan) -> dict:
+    return {
+        "id": plan.name,
+        "price_usd_month": microusd_to_usd(plan.price_microusd_month),
+        "monthly_budget_usd": microusd_to_usd(plan.monthly_budget_microusd),
+        "rpm": plan.rpm,
+        "max_input_chars": plan.max_input_chars,
+        "map_reduce_max_chars": plan.map_reduce_max_chars
+        if plan.map_reduce_max_chars > plan.max_input_chars
+        else 0,
+        "cache_ttl_s": plan.cache_ttl_s,
+        "models": list(plan.allowed_models),
+    }
+
+
+def _rank(plan: Plan) -> tuple[int, int]:
+    return plan.price_microusd_month, plan.monthly_budget_microusd
+
+
+def _payment_out(p: Payment) -> dict:
+    return {
+        "id": p.id,
+        "created_at": p.created_at.isoformat(),
+        "plan": p.plan,
+        "previous_plan": p.previous_plan,
+        "amount_usd": microusd_to_usd(p.amount_microusd),
+        "status": p.status,
+        "provider": p.provider,
+        "reference": p.provider_ref,
+        "card": f"{p.card_brand.capitalize()} •••• {p.card_last4}" if p.card_last4 else None,
+    }
+
+
+@router.get("/billing")
+def billing(ctx: PortalContext = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    """Current plan, the plans on offer (cheapest first) and this tenant's payment history."""
+    plans = sorted(load_plans().plans.values(), key=_rank)
+    history = db.scalars(
+        select(Payment)
+        .where(Payment.tenant_id == ctx.tenant.id)
+        .order_by(Payment.created_at.desc())
+    ).all()
+    override = ctx.tenant.budget_override_microusd
+    return {
+        "plan": ctx.plan.name,
+        "status": ctx.tenant.status,
+        "budget_override_usd": microusd_to_usd(override) if override is not None else None,
+        "plans": [_plan_out(p) for p in plans],
+        "payments": [_payment_out(p) for p in history],
+    }
+
+
+@router.post("/billing/plan", dependencies=[Depends(require_same_origin)])
+def change_plan(
+    payload: PlanChangeRequest,
+    ctx: PortalContext = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Moves the tenant to another plan at once (D27).
+
+    A paid plan is charged its monthly price through the mock processor; moving to the free plan
+    charges nothing and refunds nothing. The new rpm, models and budget apply from the next request,
+    and this month's budget row is updated now so the overview shows the new limit.
+    """
+    if ctx.tenant.status != "active":
+        raise ApiError(403, "tenant_suspended", "this account is suspended")
+    catalog = load_plans()
+    if payload.plan not in catalog.plans:
+        raise ApiError(422, "validation_error", f"unknown plan '{payload.plan}'")
+    new, old = catalog.get(payload.plan), ctx.plan
+    if new.name == old.name:
+        raise ApiError(409, "already_on_plan", f"you are already on the {new.name} plan")
+
+    payment = None
+    if new.price_microusd_month > 0:
+        if payload.card is None:
+            raise ApiError(422, "card_required", "a card is required for a paid plan")
+        result = payments.charge(
+            payments.Card(**payload.card.model_dump()), new.price_microusd_month
+        )
+        payment = Payment(
+            tenant_id=ctx.tenant.id,
+            user_id=ctx.user.id,
+            plan=new.name,
+            previous_plan=old.name,
+            amount_microusd=new.price_microusd_month,
+            status=result.status,
+            provider=result.provider,
+            provider_ref=result.ref,
+            card_brand=result.brand,
+            card_last4=result.last4,
+        )
+        db.add(payment)
+        db.flush()
+        audit(
+            db,
+            audit_events.PAYMENT_SUCCEEDED,
+            tenant_id=ctx.tenant.id,
+            actor=ACTOR,
+            details={
+                "payment_id": payment.id,
+                "plan": new.name,
+                "amount_microusd": payment.amount_microusd,
+                "provider": result.provider,
+            },
+        )
+
+    direction = "upgrade" if _rank(new) > _rank(old) else "downgrade"
+    ctx.tenant.plan = new.name
+    budget.sync_limit(db, ctx.tenant, new)
+    audit(
+        db,
+        audit_events.PLAN_CHANGED,
+        tenant_id=ctx.tenant.id,
+        actor=ACTOR,
+        details={
+            "user_id": ctx.user.id,
+            "from": old.name,
+            "to": new.name,
+            "direction": direction,
+            "payment_id": payment.id if payment else None,
+        },
+    )
+    db.commit()
+    metrics.PLAN_CHANGES.labels(direction).inc()
+    return {
+        "plan": new.name,
+        "previous_plan": old.name,
+        "direction": direction,
+        "payment": _payment_out(payment) if payment else None,
+    }

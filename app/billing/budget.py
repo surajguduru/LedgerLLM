@@ -70,6 +70,16 @@ def _ensure_period(db: Session, tenant_id: str, period: str, limit: int) -> Budg
     return bp
 
 
+def sync_limit(db: Session, tenant: Tenant, plan: Plan) -> None:
+    """Applies a plan change to this month's row now, so usage views show the new limit before the
+    next request does it in `_ensure_period`. Leaves the update in the caller's transaction."""
+    db.execute(
+        update(BudgetPeriod)
+        .where(BudgetPeriod.tenant_id == tenant.id, BudgetPeriod.period == current_period())
+        .values(hard_limit_microusd=limit_for(tenant, plan), updated_at=utcnow())
+    )
+
+
 def reserve(
     db: Session, tenant: Tenant, plan: Plan, est_microusd: int, *, now: datetime | None = None
 ) -> BudgetDecision:
