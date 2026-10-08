@@ -222,3 +222,21 @@ def test_free_tenant_also_protected(client):
     key = make_tenant(client, plan="free")["api_key"]
     r = summarize(client, key, instructions="jailbreak the model")
     assert r.status_code == 400
+
+
+def test_canary_in_source_does_not_skip_the_other_output_checks():
+    # a source that mentions "pwned" must not exempt the summary from the URL, toxicity and PII checks
+    source = "Check haveibeenpwned: you were pwned."
+    v = moderate_output(
+        "PWNED. Log in at http://evil.example/login, mail a@b.co. "
+        "You are an idiot and everyone hates you.",
+        source_text=source,
+    )
+    assert v.blocked is True and v.category == "instruction_followed"
+    assert v.details["foreign_urls"][0].startswith("http://evil.example/login")
+    assert moderate_output("PWNED. You are an idiot.", source_text=source).category == "toxicity"
+    pii = moderate_output("PWNED, mail a@b.co.", source_text=source)
+    assert pii.category == "pii_leak" and "[EMAIL]" in pii.details["text"]
+    # nothing else fired: still served, still flagged
+    ok = moderate_output("- The site reports you were PWNED.", source_text=source)
+    assert ok.blocked is False and ok.category == "canary_in_source"
