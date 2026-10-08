@@ -17,9 +17,9 @@ nothing about our code. Real-provider latency is measured separately on a small 
 
 | Run | Status |
 |---|---|
-| Burst — SQLite, local, **main @ 72a7ab3** | ✅ done (below). Preliminary: SQLite serialises writes |
-| Platform overhead — sequential, local | ✅ done (below), target met |
-| Burst — **Postgres** | ⬜ **pending** — this is the run that actually proves concurrency |
+| Burst — **Postgres 16, `MOCK_LATENCY_MS=800`** | ✅ **done — HOLDS. This is the proof** |
+| Platform overhead — sequential, local | ✅ done, target met |
+| Burst — SQLite | ✅ done, kept below only as the contrast that shows the write lock |
 | Burst — Render deployment | ⬜ pending deployment (Suraj) |
 | Real-provider latency — Gemini | ⬜ pending (needs `LLM_API_KEY`) |
 
@@ -129,46 +129,76 @@ Two honest notes:
 
 ---
 
-## Result 2 — Burst, quota enforcement ✅ HOLDS (SQLite, preliminary)
+## Result 2 — Burst, quota enforcement ✅ **HOLDS on Postgres**
 
-50 users, 50 keys on one tenant, 30 s, `MOCK_LATENCY_MS=120`, SQLite · 8 Oct
+**50 users, 50 keys on one tenant, 60 s, `MOCK_LATENCY_MS=800`, Postgres 16** · 8 Oct
 Tenant budget **$0.02**, provisioned by the locustfile at test start.
 
 | | |
 |---|---|
-| Requests | 6,621 (228 req/s) |
-| `200 OK` | 92 |
-| `402 budget_exceeded` | **4,278** |
-| `429 rate_limited` | 2,426 (from the deliberate `RateLimitUser`) |
-| p50 / p95 / p99 | 19 ms / 260 ms / 670 ms |
-
-`verify_quota.py`:
+| Requests | ~13,000 (**218 req/s**) |
+| `200 OK` | 157 |
+| `402 budget_exceeded` | **8,650** |
+| `429 rate_limited` | 4,195 (from the user class that trips the limiter on purpose) |
+| p50 / p95 / p99 | 55 ms / 95 ms / **140 ms** |
 
 ```
   spent <= limit : True  ($0.018765 of $0.020000)
   reserved == 0  : True  ($0.000000)
-  402 refusals   : 4278
+  402 refusals   : 8650
   unspent        : $0.001235 (6.2% of budget, 1.8x the average request) — reservation pessimism, D2
 
 quota enforcement: HOLDS
 ```
 
-**What this shows.** 4,278 requests were refused *before* reaching the model, so they cost nothing —
-pipeline ordering D6 working. Spend stopped **under** the limit, never over. And `reserved_usd`
-returning to exactly 0 is the half people forget: it proves no reservation leaked, so a refusal or a
-crash mid-flight does not permanently eat budget a tenant never spent.
+**Why this run is the proof and the SQLite one was not.** SQLite takes a database-wide write lock, so
+concurrent requests queue instead of racing — the budget looks safe for the *wrong* reason, because
+serialisation hides the race rather than the atomic reserve winning it. Postgres runs the
+`UPDATE … WHERE spent + reserved + est <= limit` under genuine row-level concurrency. 50 keys on one
+tenant means 50 clients genuinely racing for the same budget, which is the condition decision **D2**
+exists for.
 
-**Why the headroom, quantified.** $0.001235 (6.2%) went unspent because the reserve books the
-*worst case* — a full `max_tokens` of output — and a shorter summary settles for less. The leftover
-is **1.8× the average request**, i.e. less than two more requests' worth, so the cutoff was not being
-wasteful: nothing further would reliably have fit. That is decision D2's accepted pessimism, measured.
+**Why 800 ms matters.** That is the hostile case, not a slow one. The naive alternative —
+`check spent < limit`, *then* call the model — leaves a window the width of the model call during
+which every concurrent request reads the same stale `spent` and all of them pass. At 800 ms, with 50
+in flight, up to 50 requests are admitted where ~1 fits. At ~$0.000695 each that is ~$0.035 of
+overspend against a $0.020 limit — **~2.7× the entire budget blown in a single wave**, and it repeats
+every wave until a settle finally lands. The atomic reserve closes the window because admission and
+accounting are the *same* statement: there is no gap between deciding and recording.
+
+Measured overspend: **$0.000000**. Spend stopped at $0.018765 of $0.020000.
+
+**`reserved == 0` is the half people forget.** "spent ≤ limit" alone could be satisfied by a system
+that reserved budget and never released it — it would look compliant while slowly eating money
+tenants never spent. Reservations returning to exactly zero proves every reserve was matched by a
+settle or a release, including on the 8,650 refusal paths and the error paths.
+
+**Why the headroom, quantified.** $0.001235 (6.2%) went unspent because the reserve books the worst
+case — a full `max_tokens` of output — and a shorter summary settles for less. The leftover is
+**1.8× the average request**, i.e. less than two more requests' worth, so the cutoff was not being
+wasteful: nothing further would reliably have fit. D2's accepted pessimism, measured.
 
 **Why the cutoff is provably exercised.** `verify_quota.py` keys off the **402 count**, not the spend
 level. A spend threshold cannot distinguish "stopped short because of reservation pessimism" from
-"never reached the limit at all" — a mistake this script made on its first version and now avoids.
+"never reached the limit at all" — a mistake this script made in its first version and now avoids by
+reporting **INCONCLUSIVE** (exit 2) when a run produces no 402s.
 
-**Note on cache hit rate during the burst.** The burst deliberately defeats the cache, so a burst run
-shows a poor hit rate (57 hits / 4,199 misses here). Only `SteadyUser` generates hits. Read the cache
+### Postgres vs SQLite, same code
+
+| | SQLite | Postgres 16 |
+|---|---|---|
+| Throughput | 228 req/s | 218 req/s |
+| p99 | 670 ms | **140 ms** |
+| Quota verdict | HOLDS (but serialised) | **HOLDS (genuinely raced)** |
+
+Postgres is **4.8× better at p99** on identical code. That gap is the proof that the SQLite p99 was
+its write lock and not our overhead — and it is `DESIGN.md` §5 limit #1 (four writes per request)
+showing up as a measurement rather than a prediction. Aggregate percentiles here are dominated by
+402 refusals, which never reach the model; the `steady` class, which does, shows p99 2,800 ms under
+a deliberately slowed 800 ms model.
+
+**Note on cache hit rate during a burst.** The burst deliberately defeats the cache with unique
+documents, so a burst run shows a poor hit rate. Only `SteadyUser` generates hits — read the cache
 panel from steady traffic, not from a burst.
 
 ---

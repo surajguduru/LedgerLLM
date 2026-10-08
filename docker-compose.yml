@@ -30,6 +30,7 @@ services:
     image: prom/prometheus:latest
     volumes:
       - ./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports: ["9090:9090"]
 
   grafana:
