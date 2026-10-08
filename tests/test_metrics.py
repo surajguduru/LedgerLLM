@@ -96,6 +96,11 @@ def test_dashboard_queries_only_metrics_we_actually_expose(client, api_key):
     gives the histograms an observation so their `_bucket` series exist.
     """
     summarize(client, api_key)
+    # The online judge is off in tests (QUALITY_SAMPLE_RATE=0); give its histogram one observation the
+    # way the request above does for the others, so its _sum/_count series exist.
+    from app.observability import metrics as m
+
+    m.QUALITY_SCORE.labels("test", "faithfulness").observe(5)
     text = client.get("/metrics").text
     missing = {n for n in dashboard_metric_names() - PENDING_METRICS if n not in text}
     assert not missing, f"dashboard panels query metrics that /metrics does not expose: {missing}"
