@@ -1,13 +1,33 @@
 """Long documents: what to send the model when a page is longer than the plan allows (D20).
 
 Cutting `text[:limit]` loses the end of every long page, and the end is where reports,
-articles and papers put their conclusions. So a document over the limit keeps its head and
-its tail: 70 % of the budget from the start, 30 % from the end, both cut on whitespace so no
-word is split, joined by a marker that tells the model (and a reader of the logs) how much
-was left out.
+articles and papers put their conclusions. Two strategies replace it:
+
+- head_tail (every plan): keep 70 % of the budget from the start and 30 % from the end, both
+  cut on whitespace so no word is split, joined by a marker that tells the model (and anyone
+  reading the request log) how much was left out. One model call, as before.
+- map_reduce (plans with `map_reduce_max_chars` above `max_input_chars`): split the whole
+  text into paragraph-aligned chunks that each fit the input limit, summarise every chunk as
+  bullets with the same versioned prompt (map), then summarise those bullets into the
+  requested style (reduce). Text beyond the plan's ceiling is head+tail-truncated to it
+  first, so the number of calls, and with it the cost, is bounded per plan.
+
+Everything here is pure or takes the provider as an argument; budget, ledger and metrics
+stay in the pipeline (app/api/summarize.py), which reserves the sum of `MapReducePlan.calls`
+up front and books one ledger row per `StageResult`.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import Literal
+
+from app.feature.fetch import FetchedPage
+from app.feature.prompts import PromptSpec
+from app.feature.summarize import SummaryResult, build_user_prompt, output_token_cap, run_summary
+from app.llm import estimate_tokens
+from app.llm.base import LLMProvider, ProviderError
+from app.schemas import Style
 
 HEAD_SHARE = 0.7
 # How far a cut may move from its target to land on whitespace. Text without whitespace in
@@ -125,3 +145,209 @@ def chunk_spans(text: str, max_chars: int, overlap: int | None = None) -> list[t
 
 def split_chunks(text: str, max_chars: int, overlap: int | None = None) -> list[str]:
     return [text[a:b] for a, b in chunk_spans(text, max_chars, overlap)]
+
+
+# --- strategy and map-reduce ------------------------------------------------------------------
+
+Strategy = Literal["full", "head_tail", "map_reduce"]
+
+
+@dataclass(frozen=True)
+class Prepared:
+    text: str
+    strategy: Strategy
+    omitted: int  # characters left out; 0 means the summary covers the whole document
+
+
+def prepare_text(text: str, *, max_input_chars: int, map_reduce_max_chars: int = 0) -> Prepared:
+    """Choose how a document is summarised. A ceiling at or below the input limit means the
+    plan has no map-reduce; text above the ceiling is head+tail-truncated to it first."""
+    if len(text) <= max_input_chars:
+        return Prepared(text, "full", 0)
+    if map_reduce_max_chars > max_input_chars:
+        text, omitted = truncate_head_tail(text, map_reduce_max_chars)
+        return Prepared(text, "map_reduce", omitted)
+    text, omitted = truncate_head_tail(text, max_input_chars)
+    return Prepared(text, "head_tail", omitted)
+
+
+def map_word_budget(max_words: int, n_chunks: int) -> int:
+    """Words per chunk summary: twice the final budget split across the chunks, so the reduce
+    step has room to choose, but at least 40 (a few useful bullets) and at most `max_words`."""
+    return min(max_words, max(40, 2 * max_words // n_chunks))
+
+
+@dataclass(frozen=True)
+class PlannedCall:
+    stage: str  # "map:2/5" or "reduce"; recorded in the ledger's prompt_version
+    est_input_tokens: int  # worst case; the reduce input is bounded by the map output caps
+    max_tokens: int
+
+
+def build_reduce_prompt(
+    prompt: PromptSpec,
+    page: FetchedPage,
+    summaries: list[str],
+    *,
+    style: Style,
+    max_words: int,
+    instructions: str | None,
+) -> str:
+    """The chunk summaries become the reduce step's document: inside <document> like any other
+    text, so an instruction smuggled into a chunk summary is still data."""
+    n = len(summaries)
+    text = "\n\n".join(f"Part {i} of {n}:\n{s}" for i, s in enumerate(summaries, 1))
+    title = f"{page.title or 'untitled'} (summaries of {n} consecutive parts)"
+    return build_user_prompt(
+        prompt,
+        replace(page, title=title, text=text),
+        style=style,
+        max_words=max_words,
+        instructions=instructions,
+    )
+
+
+@dataclass(frozen=True)
+class MapReducePlan:
+    page: FetchedPage
+    chunks: list[str]
+    map_prompts: list[str]
+    style: Style
+    max_words: int
+    instructions: str | None
+    calls: list[PlannedCall]  # one per map, then the reduce
+
+    def reduce_prompt(self, prompt: PromptSpec, summaries: list[str]) -> str:
+        return build_reduce_prompt(
+            prompt,
+            self.page,
+            summaries,
+            style=self.style,
+            max_words=self.max_words,
+            instructions=self.instructions,
+        )
+
+
+def plan_map_reduce(
+    prompt: PromptSpec,
+    page: FetchedPage,
+    *,
+    chunk_chars: int,
+    style: Style,
+    max_words: int,
+    instructions: str | None,
+) -> MapReducePlan:
+    """Split the page and bound every call before any is made, so the pipeline can reserve the
+    worst case of the whole request at once."""
+    chunks = split_chunks(page.text, chunk_chars)
+    n = len(chunks)
+    map_words = map_word_budget(max_words, n)
+    map_cap = output_token_cap(prompt, map_words)
+    title = page.title or "untitled"
+    map_prompts = [
+        build_user_prompt(
+            prompt,
+            replace(page, title=f"{title} (part {i} of {n})", text=chunk),
+            style="bullets",
+            max_words=map_words,
+            instructions=instructions,
+        )
+        for i, chunk in enumerate(chunks, 1)
+    ]
+    system = estimate_tokens(prompt.system)
+    calls = [
+        PlannedCall(f"map:{i}/{n}", system + estimate_tokens(p), map_cap)
+        for i, p in enumerate(map_prompts, 1)
+    ]
+    # The reduce input is its frame plus the map outputs, each at most `map_cap` tokens.
+    frame = build_reduce_prompt(
+        prompt, page, [""] * n, style=style, max_words=max_words, instructions=instructions
+    )
+    reduce_in = system + estimate_tokens(frame) + n * map_cap
+    calls.append(PlannedCall("reduce", reduce_in, output_token_cap(prompt, max_words)))
+    return MapReducePlan(page, chunks, map_prompts, style, max_words, instructions, calls)
+
+
+@dataclass
+class StageResult:
+    stage: str | None  # None for a single-call summary
+    result: SummaryResult
+
+    @property
+    def ledger_suffix(self) -> str:
+        return f"#{self.stage}" if self.stage else ""
+
+
+class MapReduceFailed(ProviderError):
+    """A map or reduce call failed. Keeps the calls that had already answered, whose tokens the
+    platform absorbs: the request bills nothing (D20)."""
+
+    def __init__(self, stage: str, cause: ProviderError, completed: list[StageResult]) -> None:
+        super().__init__(f"{stage}: {cause}", retryable=cause.retryable, code=cause.code)
+        self.stage = stage
+        self.completed = completed
+
+
+def run_map_reduce(
+    provider: LLMProvider,
+    plan: MapReducePlan,
+    *,
+    model: str,
+    prompt: PromptSpec,
+    allow_fallback: bool,
+) -> list[StageResult]:
+    """Summarise each chunk as bullets, then the bullets into the requested style. Calls run one
+    after another (free-tier rpm); each may fall back on its own. Returns map results first and
+    the reduce result last."""
+    done: list[StageResult] = []
+
+    def call(stage: PlannedCall, user_prompt: str) -> SummaryResult:
+        try:
+            return run_summary(
+                provider,
+                model=model,
+                prompt=prompt,
+                user_prompt=user_prompt,
+                max_tokens=stage.max_tokens,
+                allow_fallback=allow_fallback,
+            )
+        except ProviderError as exc:
+            raise MapReduceFailed(stage.stage, exc, list(done)) from exc
+
+    for stage, user_prompt in zip(plan.calls[:-1], plan.map_prompts, strict=True):
+        done.append(StageResult(stage.stage, call(stage, user_prompt)))
+    reduce = plan.calls[-1]
+    reduce_prompt = plan.reduce_prompt(prompt, [s.result.text for s in done])
+    done.append(StageResult(reduce.stage, call(reduce, reduce_prompt)))
+    return done
+
+
+@dataclass(frozen=True)
+class Combined:
+    """The response's view of one or more calls: tokens and latency summed."""
+
+    text: str
+    model: str
+    fallback_from: str | None
+    provider: str | None
+    input_tokens: int
+    output_tokens: int
+    latency_ms: int
+
+
+def combine(stages: list[StageResult], *, requested_model: str) -> Combined:
+    """`model` is the requested model unless every call fell back, then the model that answered;
+    `fallback_from` names the requested model when any call fell back. Each ledger row still
+    names the model that answered that call. With one call this is the single-call rule (D19)."""
+    results = [s.result for s in stages]
+    final = results[-1]
+    all_fell_back = all(r.fallback_from for r in results)
+    return Combined(
+        text=final.text,
+        model=final.model if all_fell_back else requested_model,
+        fallback_from=requested_model if any(r.fallback_from for r in results) else None,
+        provider=final.provider,
+        input_tokens=sum(r.input_tokens for r in results),
+        output_tokens=sum(r.output_tokens for r in results),
+        latency_ms=sum(r.latency_ms for r in results),
+    )
