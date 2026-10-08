@@ -89,7 +89,7 @@ def test_never_shared_across_tenants(client):
 
 def test_withheld_summary_is_never_cached(client, api_key, monkeypatch):
     flagged = GuardrailVerdict(blocked=True, category="pii_leak", score=1.0, method="test")
-    monkeypatch.setattr(pipeline, "moderate_output", lambda text: flagged)
+    monkeypatch.setattr(pipeline, "moderate_output", lambda text, **kw: flagged)
     r = summarize(client, api_key)
     assert r.json()["summary"] == pipeline.WITHHELD
     with SessionLocal() as db:
@@ -99,7 +99,7 @@ def test_withheld_summary_is_never_cached(client, api_key, monkeypatch):
 def test_shadow_flagged_output_is_not_cached(client, api_key, monkeypatch):
     monkeypatch.setattr(get_settings(), "guardrails_mode", "shadow")
     flagged = GuardrailVerdict(blocked=True, category="pii_leak", score=1.0, method="test")
-    monkeypatch.setattr(pipeline, "moderate_output", lambda text: flagged)
+    monkeypatch.setattr(pipeline, "moderate_output", lambda text, **kw: flagged)
     r = summarize(client, api_key)
     assert r.json()["summary"] != pipeline.WITHHELD  # shadow serves it once...
     with SessionLocal() as db:
