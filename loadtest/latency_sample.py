@@ -25,6 +25,7 @@ import argparse
 import json
 import statistics
 import time
+import uuid
 from pathlib import Path
 
 import httpx
@@ -45,8 +46,14 @@ PARAGRAPH = (
 
 
 def document(chars: int) -> str:
-    """A document of roughly `chars` characters, built by repeating one realistic paragraph."""
-    return (PARAGRAPH * (chars // len(PARAGRAPH) + 1))[:chars]
+    """A document of roughly `chars` characters, built by repeating one realistic paragraph.
+
+    Every call appends a unique marker. The response cache (pipeline stage 4.5) is an exact match on
+    the request body and returns before the model call at zero cost, so sending the same document
+    twice would measure the cache, not the model. The marker keeps every request a genuine miss.
+    """
+    body = (PARAGRAPH * (chars // len(PARAGRAPH) + 1))[:chars]
+    return f"{body} [sample {uuid.uuid4().hex}]"
 
 
 def percentile(values: list[float], q: float) -> float:
@@ -141,10 +148,10 @@ def main() -> None:
     results: list[dict] = []
     with httpx.Client(base_url=args.host, timeout=120.0) as client:
         for label, chars in SIZES.items():
-            text = document(chars)
             samples = []
             for i in range(args.per_size):
-                sample = measure(client, key, text, args.max_words)
+                # fresh document per request: see document() -- a repeat would be a free cache hit
+                sample = measure(client, key, document(chars), args.max_words)
                 samples.append(sample)
                 if sample["ok"]:
                     print(

@@ -17,11 +17,15 @@ nothing about our code. Real-provider latency is measured separately on a small 
 
 | Run | Status |
 |---|---|
-| Burst — SQLite, local | ✅ done (below). Preliminary: SQLite serialises writes |
+| Burst — SQLite, local, **main @ 72a7ab3** | ✅ done (below). Preliminary: SQLite serialises writes |
 | Platform overhead — sequential, local | ✅ done (below), target met |
 | Burst — **Postgres** | ⬜ **pending** — this is the run that actually proves concurrency |
 | Burst — Render deployment | ⬜ pending deployment (Suraj) |
 | Real-provider latency — Gemini | ⬜ pending (needs `LLM_API_KEY`) |
+
+> **8 Oct: the test had to be redesigned.** Suraj's rate limiter and response cache landed on `main`,
+> and between them they made the old burst test meaningless — it stopped producing a single 402. See
+> *Why one key and one document no longer works* below. Numbers on this page are from the new design.
 
 > **Why the Postgres run is the real one.** SQLite takes a database-wide write lock, so concurrent
 > requests queue instead of racing. That makes the budget *look* safe for the wrong reason — the
@@ -36,11 +40,17 @@ nothing about our code. Real-provider latency is measured separately on a small 
 ```bash
 # 1. burst, local Postgres (the real run)
 docker compose up -d db
-DATABASE_URL=postgresql+psycopg://ledger:ledger@localhost:5432/ledger make seed
-DATABASE_URL=postgresql+psycopg://ledger:ledger@localhost:5432/ledger \
-  LLM_PROVIDER=mock MOCK_LATENCY_MS=800 .venv/bin/uvicorn app.main:app --port 8000
+export DATABASE_URL=postgresql+psycopg://ledger:ledger@localhost:5432/ledger
+make seed                                 # seeds the 'pro' and 'free' keys the other users need
+LLM_PROVIDER=mock MOCK_LATENCY_MS=800 .venv/bin/uvicorn app.main:app --port 8000
 make loadtest                             # 50 users, 60 s
 .venv/bin/python loadtest/verify_quota.py # must print: quota enforcement: HOLDS
+
+# The burst tenant is created by the locustfile itself at test start (one key per user) and written
+# to loadtest/burst_tenant.json, which verify_quota.py reads. That needs the admin token:
+#   ADMIN_TOKEN=... make loadtest          # defaults to the dev token
+# Without it the run falls back to the single seeded 'burst' key, prints a warning, and the 402
+# count stops being a meaningful test of the cutoff.
 
 # 2. platform overhead only — no fake model latency, sequential so there is no queueing
 MOCK_LATENCY_MS=0 .venv/bin/uvicorn app.main:app --port 8000
@@ -57,91 +67,113 @@ HOST=https://<render-url> .venv/bin/python loadtest/verify_quota.py
 
 ---
 
+## Why one key and one document no longer works
+
+The old test pointed 50 users at one API key with one fixed document. On current `main` that produces:
+
+```
+status code distribution: {200: 120, 429: 3621}      <- not one 402
+```
+
+Two stages sit in front of the budget and absorbed the whole burst:
+
+1. **The rate limiter is per key; the budget is per tenant.** Every request past `plan.rpm` is
+   refused with `429` at stage 3, before the budget is consulted at stage 5. The limiter *shields*
+   the budget, so the cutoff never fires. This is correct system behaviour — and it makes a
+   single-key burst useless as a budget test.
+2. **The response cache returns before the budget reserve.** Stage 4.5 is an exact match on the
+   request body and returns at zero cost. Sending the same document every time means nearly every
+   request is a free cache hit, so the budget is never spent down.
+
+`verify_quota.py` still printed `HOLDS` — **vacuously**. Spend was under the limit because almost
+nothing had been spent. That is the kind of green result that is worse than a red one.
+
+**The fix** (`locustfile.py`): to put real concurrent pressure on one tenant budget,
+
+- **one key per simulated user, all keys on one tenant** — budgets are per tenant, limits are per
+  key, so N keys give N× the admitted throughput against a single shared budget;
+- **each user paced below its key's own rpm** (enterprise, 600 rpm = 10 req/s; users run at ~5 req/s)
+  so the limiter stays out of the way of the thing being measured;
+- **a unique document per request** so the cache cannot serve it for free.
+
+Separate small user classes still exercise the cache (`SteadyUser`, repeated document) and the
+limiter (`RateLimitUser`, free-plan key at rpm 5) on purpose, so those paths still appear on the
+dashboard. `verify_quota.py` now reports **INCONCLUSIVE** (exit 2) if the run produced no 402s at
+all, so this failure cannot pass silently again.
+
+---
+
 ## Result 1 — Platform overhead ✅ target met
 
-Our own cost per request: auth, idempotency, rate-limit check, budget reserve, guardrail heuristics,
-ledger write, redacted log, audit, metrics. `MOCK_LATENCY_MS=0` removes the model, and requests are
-**sequential** so the number is per-request work and not queueing delay.
+Our own cost per request: auth, idempotency, rate-limit check, cache lookup, budget reserve,
+guardrail heuristics, ledger write, redacted log, audit, metrics. `MOCK_LATENCY_MS=0` removes the
+model, and requests are **sequential** so the number is per-request work, not queueing delay.
 
-`latency_sample.py --per-size 20 --sleep 0` · mock · SQLite · macOS dev machine · 7 Oct
+`latency_sample.py --per-size 20 --sleep 0` · mock · SQLite · macOS dev machine · 8 Oct
 
-| Document | Input tokens | p50 | p95 | max (n=20) |
-|---|---|---|---|---|
-| small | 1,181 | **6 ms** | 9 ms | 9 ms |
-| medium | 3,181 | **7 ms** | 9 ms | 9 ms |
-| large | 6,181 | **8 ms** | 11 ms | 11 ms |
+| Document | Input tokens | p50 | steady-state max |
+|---|---|---|---|
+| small | 1,192 | **7 ms** | 9 ms |
+| medium | 3,192 | **8 ms** | 9 ms |
+| large | 6,192 | **10 ms** | 10 ms |
 
-**Target: p99 ≤ 25 ms → met.** Worst request observed across all 60 was 11 ms.
+**Target: p99 ≤ 25 ms → met in steady state.**
 
-Overhead grows only ~2 ms from a 1.2k-token to a 6.2k-token document, i.e. it is roughly flat in
-document size. That is expected: the per-request work is a fixed number of small SQL statements plus
-regex guardrails; nothing in the platform path scales with document length except the regex scan.
+Two honest notes:
+- The **first request after process start** is 12–47 ms (lazy imports, cold connection pool, empty
+  caches). It is excluded above and reported separately rather than folded into a percentile.
+- Overhead rose from **6/7/8 ms** (7 Oct) to **7/8/10 ms** as the pipeline gained a rate-limiter
+  upsert and a cache lookup. Still ~2 ms of growth from a 1.2k- to a 6.2k-token document, i.e.
+  roughly flat in document size — nothing in the platform path scales with length except the
+  guardrail regex scan.
 
 ---
 
 ## Result 2 — Burst, quota enforcement ✅ HOLDS (SQLite, preliminary)
 
-`locustfile.py`, 20 users, 20 s, `MOCK_LATENCY_MS=120`, SQLite · 7 Oct
-
-The `burst` tenant is seeded with a **$0.02** monthly budget (`scripts/seed.py`), so it exhausts
-after a couple of dozen requests and everything after that must be refused.
+50 users, 50 keys on one tenant, 30 s, `MOCK_LATENCY_MS=120`, SQLite · 8 Oct
+Tenant budget **$0.02**, provisioned by the locustfile at test start.
 
 | | |
 |---|---|
-| Requests sent | 4,125 (229 req/s) |
-| `200 OK` | 103 |
-| `402 budget_exceeded` | 4,022 |
-| `429 rate_limited` | 0 — see note |
-| Latency p50 / p95 / p99 | 17 ms / 170 ms / 430 ms |
+| Requests | 6,621 (228 req/s) |
+| `200 OK` | 92 |
+| `402 budget_exceeded` | **4,278** |
+| `429 rate_limited` | 2,426 (from the deliberate `RateLimitUser`) |
+| p50 / p95 / p99 | 19 ms / 260 ms / 670 ms |
 
 `verify_quota.py`:
 
 ```
-limit_usd      0.020000
-spent_usd      0.019264     <- never exceeded the limit
-reserved_usd   0.0          <- every reservation was settled or released
-requests       28
+  spent <= limit : True  ($0.018765 of $0.020000)
+  reserved == 0  : True  ($0.000000)
+  402 refusals   : 4278
+  unspent        : $0.001235 (6.2% of budget, 1.8x the average request) — reservation pessimism, D2
+
 quota enforcement: HOLDS
 ```
 
-**What this shows.** 4,022 requests were refused *before* reaching the model, so they cost nothing.
-Spend stopped at $0.019264 of a $0.020 limit — under it, never over. `reserved_usd` returning to
-exactly 0 is the second half of the proof: no reservation leaked, so a crash or a refusal mid-flight
-does not permanently eat a tenant's budget.
+**What this shows.** 4,278 requests were refused *before* reaching the model, so they cost nothing —
+pipeline ordering D6 working. Spend stopped **under** the limit, never over. And `reserved_usd`
+returning to exactly 0 is the half people forget: it proves no reservation leaked, so a refusal or a
+crash mid-flight does not permanently eat budget a tenant never spent.
 
-**Why the headroom.** $0.000736 was left unspent. The reserve books the *worst-case* cost (full
-`max_tokens` of output) before the call, and a summary that comes back shorter settles for less. So a
-tenant near their limit can be refused a request that would in fact have fit. That pessimism is the
-accepted cost of D2, and this is it measured: ~3.7% of the budget unused.
+**Why the headroom, quantified.** $0.001235 (6.2%) went unspent because the reserve books the
+*worst case* — a full `max_tokens` of output — and a shorter summary settles for less. The leftover
+is **1.8× the average request**, i.e. less than two more requests' worth, so the cutoff was not being
+wasteful: nothing further would reliably have fit. That is decision D2's accepted pessimism, measured.
 
-**Note on 0 × 429.** `app/traffic/ratelimit.py` is still a pass-through stub (Suraj's task), so no
-request was rate limited. Re-run after that lands to get a real 429 count.
+**Why the cutoff is provably exercised.** `verify_quota.py` keys off the **402 count**, not the spend
+level. A spend threshold cannot distinguish "stopped short because of reservation pessimism" from
+"never reached the limit at all" — a mistake this script made on its first version and now avoids.
 
----
-
-## Result 3 — Throughput ✅ target met (SQLite, preliminary)
-
-`locustfile.py`, 50 users, 30 s, `MOCK_LATENCY_MS=0`, SQLite · 7 Oct
-
-| | |
-|---|---|
-| Throughput | **270 req/s** (target ≥ 50) |
-| Requests | 8,040 |
-| p50 / p95 / p99 | 73 ms / 310 ms / 930 ms |
-| `200` / `402` | 374 / 7,666 |
-
-Throughput beats the target 5×, but read it with the caveat that 95% of these requests are cheap
-402s that never reach the model.
-
-**The p99 of 930 ms is not platform overhead** — compare it with the 11 ms worst case in Result 1.
-The difference is SQLite's database-wide write lock: at 50 concurrent writers, requests spend their
-time waiting for the lock, not doing work. This is the clearest argument for re-running on Postgres,
-and it is also a live demonstration of scaling limit #1 in `DESIGN.md §5` (write amplification — four
-writes per request).
+**Note on cache hit rate during the burst.** The burst deliberately defeats the cache, so a burst run
+shows a poor hit rate (57 hits / 4,199 misses here). Only `SteadyUser` generates hits. Read the cache
+panel from steady traffic, not from a burst.
 
 ---
 
-## Result 4 — Real-provider latency ⬜ pending
+## Result 3 — Real-provider latency ⬜ pending
 
 `latency_sample.py` with `LLM_PROVIDER=gemini`: 30 requests, 10 per size, 4.5 s apart to stay inside
 the free tier's per-minute limit. Reports end-to-end p50/p95/p99, model-only (`usage.latency_ms`) and

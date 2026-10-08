@@ -441,3 +441,115 @@ first, then I rebase. 30 seconds of conflict resolution, known in advance.
   stub, so the 0 × 429 in my current numbers becomes a real figure.
 - His own numbers are already filed: rate-limit check p50 747 µs / p99 1,404 µs on Postgres, window
   edge burst measured at exactly the 2.0× rpm bound D3 accepts, 460 MB image, 1.1 s local cold start.
+
+---
+
+## 8 Oct (later) — Suraj's work merged, and it broke my burst test
+
+All six of Suraj's branches merged to `main` via PRs #1–#7 (`main` is now `72a7ab3`): fixed-window
+rate limiter, idempotency TTL, response cache, plan-aware routing, Postgres CI, deploy prep. I
+rebased onto it — the two conflicts were exactly the ones I had scouted, resolved in about a minute.
+Suite went from 45 passed / 16 xfailed to **80 passed / 13 xfailed**.
+
+Then I re-ran my burst test and it no longer worked. This is the most useful thing I did all day.
+
+### The silent failure
+```
+status code distribution: {200: 120, 429: 3621}      <- not one 402
+quota enforcement: HOLDS                              <- vacuously true
+```
+
+Yesterday's headline result — 4,022 × 402, quota HOLDS — **was no longer reproducible**, and the
+script still said HOLDS. Two stages that landed on `main` sit in front of the budget:
+
+1. **The rate limiter is per KEY; the budget is per TENANT.** Everything past `plan.rpm` is refused
+   with 429 at stage 3, before the budget is consulted at stage 5. The limiter *shields* the budget,
+   so the cutoff never fires. That is correct system behaviour — and it makes a single-key burst
+   worthless as a budget test.
+2. **The response cache returns before the budget reserve.** Stage 4.5 is an exact match on the
+   request body and returns at zero cost. My locustfile sent the *same* document every request, so
+   almost everything was a free cache hit and the budget was never spent down.
+
+`verify_quota.py` passed because spend was under the limit. It was under the limit because nothing
+had been spent. **A green check that means nothing is worse than a red one** — this is the single
+best point I have for the presentation.
+
+### The redesign
+The insight that fixes it: **rate limits are per key, budgets are per tenant.** So to put genuine
+concurrent pressure on one budget:
+
+- **one key per simulated user, all on one tenant** — N keys give N× admitted throughput against one
+  shared budget;
+- **each user paced below its own key's rpm** (enterprise 600 rpm = 10 req/s; users run ~5 req/s) so
+  the limiter stays out of the way of what is being measured;
+- **a unique document per request** so the cache cannot serve it free.
+
+The locustfile now provisions that tenant itself at test start via the admin API (one key per user)
+and writes `loadtest/burst_tenant.json` for `verify_quota.py`. Two small user classes still hit the
+cache (`SteadyUser`, repeated document) and the limiter (`RateLimitUser`, free plan at rpm 5) on
+purpose, so those paths still show up on the dashboard.
+
+New result — all three refusal paths exercised:
+```
+6,621 requests at 228 req/s -> 200: 92,  402: 4,278,  429: 2,426
+spent $0.018765 of $0.020000,  reserved back to 0,  402 refusals 4,278
+quota enforcement: HOLDS
+```
+
+### A second bug: my own verification was wrong
+My first attempt at "was the cutoff actually exercised?" tested `spent >= 95% of limit`. It reported
+**INCONCLUSIVE** on a run with 4,278 refusals, because spend stopped at 93.8%.
+
+The reason is the thing I had already measured: reserve-then-settle books worst-case cost and settles
+for less, so spend *deliberately* stops short of the limit. A spend threshold cannot tell
+"stopped short because of reservation pessimism" apart from "never reached the limit at all".
+
+Fixed by keying off the **402 count** — the direct evidence — which the locustfile now hands over.
+`verify_quota.py` exits 2 with **INCONCLUSIVE** if a run produced no 402s, so this class of silent
+pass cannot recur.
+
+### Numbers that moved
+| | 7 Oct | 8 Oct (main @ 72a7ab3) |
+|---|---|---|
+| Platform overhead p50 (1.2k/3.2k/6.2k tok) | 6/7/8 ms | **7/8/10 ms** |
+| Throughput | 270 req/s | 228 req/s |
+| 402 count | 4,022 | 4,278 |
+| 429 count | 0 (limiter was a stub) | **2,426** |
+| Reservation pessimism | 3.7% | **6.2%** (1.8× avg request) |
+
+Overhead rose ~2 ms because the pipeline gained a rate-limiter upsert and a cache lookup — a real
+cost of their features, visible in my measurement. Also found that the **first request after process
+start** is 12–47 ms (lazy imports, cold pool); excluded from the percentile and reported separately
+rather than folded in.
+
+`latency_sample.py` had the same cache bug and got the same fix (unique document per request),
+otherwise every request after the first would have measured the cache instead of the model.
+
+### Housekeeping
+`ledgerllm_cache_total` came out of `PENDING_METRICS` in `tests/test_metrics.py` — the metric exists
+on `main` now, so the dashboard-sync test covers it for real. Also fixed my hit-rate panel
+denominator to `{result=~"hit|miss"}` after reading his code: the metric also emits `result=bypass`,
+and counting those would have understated the hit rate.
+
+---
+
+## Likely viva questions on the 8 Oct integration
+
+**Q: Your test passed and you changed it anyway. Why?** Because it passed for the wrong reason. The
+assertion was "spend never exceeded the limit", and that is trivially true if nothing was ever spent.
+Once the limiter and cache landed, 4,000 requests were being refused at stage 3 or served free at
+stage 4.5, so the budget code under test was barely executing. The fix was to make the budget the
+binding constraint again and to add an INCONCLUSIVE verdict so the failure announces itself.
+
+**Q: Isn't provisioning 50 keys artificial?** It is the realistic shape, not the artificial one. A
+real customer on an enterprise plan has many keys — one per service, per environment, per region —
+all drawing on one account budget. That is precisely the case where the atomic reserve has to be
+correct, and a single-key test never reaches it.
+
+**Q: Why not just raise the rate limit for the test?** Changing the limit to make a test pass would
+be testing a configuration we do not ship. Many keys at a realistic per-key rate reproduces real
+concurrency without weakening the limiter.
+
+**Q: Why is cache hit rate low in the burst numbers?** Because the burst deliberately defeats the
+cache with unique documents — it has to, or the budget is never exercised. Hit rate should be read
+from steady traffic. Worth stating when showing the dashboard so the panel is not misread.

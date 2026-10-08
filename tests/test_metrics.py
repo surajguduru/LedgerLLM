@@ -19,7 +19,8 @@ from tests.conftest import SAMPLE_TEXT, make_tenant, summarize
 DASHBOARD = Path(__file__).resolve().parent.parent / "ops/grafana/dashboards/ledgerllm.json"
 
 # Metrics the dashboard is ready for but another owner still has to emit. Remove as they land.
-PENDING_METRICS = {"ledgerllm_cache_total"}  # Suraj, with the response cache
+# ledgerllm_cache_total landed with Suraj's response cache (PR #4), so nothing is pending now.
+PENDING_METRICS: set[str] = set()
 
 
 def value(name: str, **labels) -> float:
