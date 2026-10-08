@@ -198,12 +198,24 @@ summaries without delaying responses and records a quality metric per prompt ver
 ---
 
 ## 5. Scaling limits — what breaks first at 10×
+Found and fixed first: **database connections held while waiting**. A request kept its pooled connection
+checked out through the model call (a read left open after `budget.reserve`) and while it waited for a worker
+thread after auth. 10 connections per process therefore capped concurrent requests at 10; the rest, including
+ones that would have been rate-limited or cached, failed with 500 at the pool timeout (MEASUREMENTS.md). Rule:
+no transaction stays open across a network call (URL fetch, classifier, model) or a hand-off between threads.
+`tests/test_db_connection_release.py` checks each of those points.
+
 1. **Write amplification**: each request performs four writes (ledger, request log, audit, key `last_used_at`).
    Mitigation: sample or drop `last_used_at`, batch logs through a queue, partition `usage_ledger` by month.
 2. **Hot-key counter contention** in `rate_limit_windows` → Redis `INCR` / `EXPIRE`.
 3. **Guardrail classifier CPU** on a single instance → separate service or asynchronous pre-filter.
 4. **Prometheus label cardinality** on `tenant` → aggregate per tenant from the ledger instead.
-5. A single instance is the current limit; horizontal scaling is safe because no state lives in-process.
+5. A single instance is the current limit; horizontal scaling is safe because no state lives in-process. Each
+   process opens up to 10 database connections, so the database's connection limit bounds the process count.
+6. **Worker threads**: `/v1/summarize` is synchronous, so each request in flight occupies one of anyio's 40
+   worker threads for its whole model call. One process serves at most 40 requests at once, about
+   40 ÷ model latency req/s; requests beyond that queue rather than fail (measured: 120 concurrent 7 s calls
+   → p50 21 s, no errors). Mitigation: more processes, or an async provider path.
 
 ## 6. Error contract
 Codes are stable strings and part of the API; the table lives in the `app/errors.py` docstring.

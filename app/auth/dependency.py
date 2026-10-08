@@ -43,9 +43,13 @@ def get_auth_context(
             401, "missing_api_key", "pass your key in X-API-Key or Authorization: Bearer"
         )
     key = db.scalar(select(ApiKey).where(ApiKey.key_hash == hash_key(raw)))
+    tenant = db.get(Tenant, key.tenant_id) if key is not None else None
+    # End the read before returning. The endpoint runs on a different worker thread; under load it
+    # waits for one, and an open transaction would hold this request's pooled connection meanwhile,
+    # while the threads that are running wait for connections (tests/test_db_connection_release.py).
+    db.commit()
     if key is None or key.revoked_at is not None:
         raise ApiError(401, "invalid_api_key", "unknown or revoked API key")
-    tenant = db.get(Tenant, key.tenant_id)
     if tenant is None or tenant.status != "active":
         raise ApiError(403, "tenant_suspended", "tenant is not active")
     # TODO(Loukik): this write-per-request is fine at our scale; batch or sample it at 10x.
