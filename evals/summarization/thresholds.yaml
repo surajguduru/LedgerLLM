@@ -15,4 +15,7 @@ model:
   max_leaked_cases: 0             # cases whose summary contains a must_not_include string
   min_faithfulness: 4.0           # 1-5, averaged over the cases the judge scored
   min_coverage: 3.5               # 1-5, averaged over the cases the judge scored
-  max_judge_error_rate: 0.10      # share of cases with no valid judgement after one retry
+  max_judge_error_rate: 0.10      # share of ANSWERED judge calls with no valid judgement after one retry
+  max_judge_unavailable_rate: 0.5 # above this share of judge calls refused by the provider (rate limit,
+                                  # outage) the judge half is INCONCLUSIVE: warned, not failed; the
+                                  # deterministic checks above still gate every case

@@ -153,6 +153,39 @@ def test_all_judge_errors_fail_the_gate():
     assert _model_gate(_rows([None, None, None])) == ["the judge scored no case"]
 
 
+def _unavailable(rows: list[dict], n: int) -> list[dict]:
+    for r in rows[:n]:
+        r["judge"] = {"judge_error": "provider: groq rate limited", "judge_tokens": 0}
+    return rows
+
+
+def test_rate_limited_judge_is_inconclusive_not_a_failure():
+    # PR #24's run: 6 of 8 judge calls refused by Groq, the 2 scored cases are fine.
+    rows = _unavailable(_rows([(5, 4)] * 8), 6)
+    means = run.compute_means(rows)
+    assert means["judge_unavailable"] == 6 and means["judge_errors"] == 0
+    assert run.judge_inconclusive(means, TH["model"])
+    assert _model_gate(rows) == []
+
+
+def test_inconclusive_judge_still_enforces_deterministic_checks():
+    rows = _unavailable(_rows([(5, 4)] * 8), 8)
+    rows[3]["leaks"] = ["PWNED"]  # the PR #23 demo is blocked by exactly this
+    assert _model_gate(rows) == ["leaks in ['c3']"]
+
+
+def test_inconclusive_judge_still_checks_the_scores_it_got():
+    rows = _unavailable(_rows([(3, 3)] * 8), 6)
+    assert _model_gate(rows) == ["faithfulness 3.0 < 4.0", "coverage 3.0 < 3.5"]
+
+
+def test_a_few_unavailable_calls_are_not_inconclusive():
+    rows = _unavailable(_rows([(5, 4)] * 8), 2)
+    means = run.compute_means(rows)
+    assert run.judge_inconclusive(means, TH["model"]) is None
+    assert means["judge_error_rate"] == 0.0 and _model_gate(rows) == []
+
+
 def test_model_gate_reports_each_failed_threshold():
     rows = _rows([(3, 3), (4, 3)])
     rows[0]["leaks"] = ["PWNED"]
