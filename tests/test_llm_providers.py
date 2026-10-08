@@ -199,3 +199,27 @@ def test_exhausted_budget_returns_502_and_bills_nothing(client, api_key, monkeyp
         assert db.scalars(
             select(AuditEvent).where(AuditEvent.event_type == "request.upstream_error")
         ).one()
+
+
+def _capture(seen: dict):
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+
+    return handler
+
+
+def test_response_format_is_off_by_default():
+    seen: dict = {}
+    _provider(_capture(seen)).complete(model="m", system="s", user="u", max_tokens=10)
+    assert "response_format" not in seen
+
+
+def test_response_format_is_passed_through():
+    seen: dict = {}
+    p = _provider(_capture(seen))
+    assert p.supports_response_format is True
+    p.complete(
+        model="m", system="s", user="u", max_tokens=10, response_format={"type": "json_object"}
+    )
+    assert seen["response_format"] == {"type": "json_object"}
