@@ -5,10 +5,13 @@
 # map_reduce_max_chars: text over max_input_chars is summarised whole, chunk by chunk (map-reduce),
 # up to this many characters; beyond it, head+tail-truncated to it first. 0 or absent = off, so
 # long text keeps only its head and tail (D20).
+# price_usd_month: subscription price charged when a tenant moves to the plan in the portal (D27);
+# separate from monthly_budget_usd, which caps model spend. 0 or absent = free.
 soft_warning_fraction: 0.8   # past this share of the monthly budget: X-Budget-Warning header + audit event
 
 plans:
   free:
+    price_usd_month: 0
     rpm: 5
     monthly_budget_usd: 0.50
     max_input_chars: 20000
@@ -16,6 +19,7 @@ plans:
     default_model: gemini-3.5-flash-lite
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, openai/gpt-oss-20b]
   pro:
+    price_usd_month: 19
     rpm: 60
     monthly_budget_usd: 10.00
     max_input_chars: 60000
@@ -24,6 +28,7 @@ plans:
     default_model: gemini-3.8-flash
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.8-27b]
   enterprise:
+    price_usd_month: 199
     rpm: 600
     monthly_budget_usd: 100.00
     max_input_chars: 120000

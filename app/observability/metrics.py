@@ -42,6 +42,9 @@ FEEDBACK = Counter(
 PORTAL_LOGINS = Counter(
     "ledgerllm_portal_logins_total", "Tenant portal sign-ins", ["result"]
 )  # ok | invalid | throttled | signup
+PLAN_CHANGES = Counter(
+    "ledgerllm_plan_changes_total", "Self-service plan changes in the portal", ["direction"]
+)  # upgrade | downgrade
 CACHE = Counter(
     "ledgerllm_cache_total", "Response cache lookups", ["result"]
 )  # hit | miss | bypass

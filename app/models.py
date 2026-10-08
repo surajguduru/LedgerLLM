@@ -243,3 +243,22 @@ class Feedback(Base):
     rating: Mapped[str] = mapped_column(String(8), nullable=False)  # up|down
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Payment(Base):
+    """One row per charge taken for a plan change in the portal (D27). Never stores the card number."""
+
+    __tablename__ = "payments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    plan: Mapped[str] = mapped_column(String(50), nullable=False)  # the plan paid for
+    previous_plan: Mapped[str] = mapped_column(String(50), nullable=False)
+    amount_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)  # succeeded|failed
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="mock")
+    provider_ref: Mapped[str] = mapped_column(String(64), nullable=False)  # processor's charge id
+    card_brand: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    card_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)

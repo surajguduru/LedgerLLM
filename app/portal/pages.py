@@ -1,4 +1,5 @@
-"""Tenant portal pages: /app/login, /app/signup, /app (overview), /app/keys.
+"""Tenant portal pages: /app/login, /app/signup, /app (overview), /app/keys, /app/playground,
+/app/billing.
 
 Plain HTML + vanilla JS over the /app/api endpoints, Chart.js from a CDN, no build step. All dynamic
 text is inserted with textContent or esc() — never raw HTML from the API.
@@ -142,6 +143,25 @@ animation:sp .8s linear infinite;margin:0 auto 12px} @keyframes sp{to{transform:
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);
 padding:10px 16px;border-radius:10px;font-size:.9rem;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.on{opacity:1}
+.plans{grid-template-columns:repeat(3,1fr)} @media (max-width:860px){.plans{grid-template-columns:1fr}}
+.plan{display:flex;flex-direction:column;gap:14px}
+.plan.current{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),var(--shadow)}
+.plan h2{text-transform:capitalize;display:flex;justify-content:space-between;align-items:center}
+.price{font-size:2rem;font-weight:800;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.price small{font-size:.9rem;font-weight:500;color:var(--muted);letter-spacing:0}
+.feat{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;font-size:.9rem;flex:1}
+.feat li{display:flex;gap:8px} .feat li::before{content:"✓";color:var(--ok);font-weight:700}
+.plan .btn{width:100%}
+.compare td:first-child{color:var(--muted)} .compare td,.compare th{text-transform:none}
+.compare th:not(:first-child),.compare td:not(:first-child){text-align:center}
+dialog{border:1px solid var(--line);border-radius:16px;padding:0;background:var(--surface);color:var(--ink);
+width:min(440px,calc(100vw - 32px));box-shadow:0 24px 64px rgba(16,24,40,.25)}
+dialog::backdrop{background:rgba(14,16,23,.55);backdrop-filter:blur(2px)}
+dialog form{padding:24px} dialog input{width:100%}
+.sumline{display:flex;justify-content:space-between;align-items:baseline;padding:12px 14px;border-radius:10px;
+background:var(--bg);margin:14px 0 4px}
+.testmode{font-size:.8rem;color:var(--warn);background:var(--warn-soft);border-radius:8px;padding:8px 10px;margin-top:14px}
+.row3{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 """
 
 JS = """
@@ -197,7 +217,7 @@ def _doc(title: str, body: str, script: str, charts: bool = False) -> HTMLRespon
 def _shell(active: str, content: str) -> str:
     return f"""<header class="top"><div class="top-in">
 <a class="brand" href="/app"><span class="logo">L</span>LedgerLLM</a>
-<nav class="nav"><a id="nav-overview" href="/app">Overview</a><a id="nav-playground" href="/app/playground">Playground</a><a id="nav-keys" href="/app/keys">API keys</a>
+<nav class="nav"><a id="nav-overview" href="/app">Overview</a><a id="nav-playground" href="/app/playground">Playground</a><a id="nav-keys" href="/app/keys">API keys</a><a id="nav-billing" href="/app/billing">Billing</a>
 <a href="/docs" target="_blank" rel="noopener">API docs ↗</a></nav>
 <div class="who"><span id="who"></span><button class="btn sm" id="logout">Sign out</button></div>
 </div></header><main>{content}</main>"""
@@ -301,10 +321,11 @@ async function load(period) {
   }
   $('#csv').href = '/app/api/statement.csv?period=' + s.period;
   $('#title').textContent = s.tenant_name;
-  $('#subtitle').innerHTML = `<span class="badge">${esc(s.plan[0].toUpperCase() + s.plan.slice(1))} plan</span>`;
+  $('#subtitle').innerHTML = `<span class="badge">${esc(s.plan[0].toUpperCase() + s.plan.slice(1))} plan</span>
+    <a href="/app/billing" style="margin-left:8px;font-size:.88rem">${s.plan === 'free' ? 'Upgrade' : 'Manage plan'}</a>`;
   const committed = s.spent_usd + s.reserved_usd, pct = s.limit_usd ? 100 * committed / s.limit_usd : 0;
-  $('#banner').innerHTML = pct >= 100 ? `<div class="notice bad"><strong>Budget exhausted.</strong>&nbsp;New requests return 402 until next month or a plan change.</div>`
-    : s.warning ? `<div class="notice warn"><strong>Heads-up:</strong>&nbsp;${pct.toFixed(0)}% of this month's budget is committed. Requests keep working until it is used up.</div>` : '';
+  $('#banner').innerHTML = pct >= 100 ? `<div class="notice bad"><span><strong>Budget exhausted.</strong>&nbsp;New requests return 402 until next month or a plan change. <a href="/app/billing">Upgrade your plan</a></span></div>`
+    : s.warning ? `<div class="notice warn"><span><strong>Heads-up:</strong>&nbsp;${pct.toFixed(0)}% of this month's budget is committed. Requests keep working until it is used up. <a href="/app/billing">See plans</a></span></div>` : '';
   $('#k-spent').textContent = usd(s.spent_usd); $('#k-limit').textContent = 'of ' + usd(s.limit_usd, 2) + ' budget';
   $('#k-left').textContent = usd(s.remaining_usd); $('#k-pct').textContent = pct.toFixed(1) + '% committed';
   $('#k-req').textContent = int(s.requests); $('#k-tok').textContent = int(s.input_tokens) + ' in · ' + int(s.output_tokens) + ' out tokens';
@@ -469,6 +490,7 @@ function renderSummary(text) {
   if (lines.length && lines.every(l => /^[-*•]\s/.test(l))) return '<ul>' + lines.map(l => `<li>${esc(l.replace(/^[-*•]\s+/, ''))}</li>`).join('') + '</ul>';
   return lines.map(l => `<p>${esc(l)}</p>`).join('');
 }
+const UPGRADE = ['budget_exceeded', 'model_not_allowed', 'rate_limited'];
 const FRIENDLY = {
   budget_exceeded: "This month's budget is used up for this tenant. Calls resume next month or after a plan change.",
   rate_limited: 'Too many requests for this key this minute. Wait a moment and try again.',
@@ -528,6 +550,7 @@ $('#form').onsubmit = async (e) => {
       const c = (j.error || {}).code || 'error', retry = r.headers.get('Retry-After');
       $('#result').innerHTML = `<div class="placeholder"><div style="max-width:420px"><div style="font-size:2rem">⚠️</div>
         <h2 style="margin-top:6px">${esc(c.replace(/_/g, ' '))}</h2><p class="sub">${esc(FRIENDLY[c] || '')}</p>
+        ${UPGRADE.includes(c) ? '<a class="btn primary sm" href="/app/billing">See plans</a>' : ''}
         <p class="mono sub" style="font-size:.8rem;margin-top:8px">HTTP ${r.status} · ${esc((j.error || {}).message || '')}${retry ? ' · retry after ' + esc(retry) + ' s' : ''}</p></div></div>`;
       return;
     }
@@ -548,6 +571,116 @@ shell('playground').then(async () => {
 }).catch(e => console.error(e));
 """
     return _doc("Playground", _shell("playground", content), script)
+
+
+@router.get("/app/billing")
+def billing_page() -> HTMLResponse:
+    content = """
+<div class="head"><div><h1>Billing</h1><p class="sub">Change plan at any time. The new limits apply from your next request.</p></div>
+<span class="badge" id="current"></span></div>
+<div id="banner"></div>
+<div class="grid plans" id="plans"></div>
+<div class="card section"><h2>Compare plans</h2><p class="sub">Model spend is capped by the monthly budget; the plan price is billed separately.</p>
+ <div style="overflow-x:auto"><table class="compare"><thead id="cmp-head"></thead><tbody id="cmp"></tbody></table></div></div>
+<div class="card section"><h2>Payment history</h2>
+ <div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Description</th><th>Card</th><th class="num">Amount</th><th>Status</th><th>Reference</th></tr></thead>
+ <tbody id="payments"></tbody></table></div></div>
+<dialog id="checkout"><form id="pay" novalidate>
+ <h2 id="co-title">Upgrade</h2><p class="sub" id="co-sub"></p>
+ <div class="sumline"><span id="co-line"></span><strong id="co-amount" class="price" style="font-size:1.3rem"></strong></div>
+ <label for="cc-name">Name on card</label><input id="cc-name" autocomplete="cc-name" required>
+ <label for="cc-number">Card number</label><input id="cc-number" inputmode="numeric" autocomplete="cc-number" placeholder="4242 4242 4242 4242" maxlength="23" required>
+ <div class="row3"><div><label for="cc-exp">Expiry</label><input id="cc-exp" inputmode="numeric" autocomplete="cc-exp" placeholder="MM / YY" maxlength="7" required></div>
+  <div><label for="cc-cvc">CVC</label><input id="cc-cvc" inputmode="numeric" autocomplete="cc-csc" placeholder="123" maxlength="4" required></div></div>
+ <div class="testmode"><strong>Test mode.</strong> No real charge is made. Any valid card number works, e.g. 4242 4242 4242 4242 with a future expiry.</div>
+ <div class="err" id="co-err" role="alert"></div>
+ <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+  <button class="btn" type="button" id="co-cancel">Cancel</button><button class="btn primary" type="submit" id="co-pay">Pay</button></div>
+</form></dialog>"""
+    script = """
+let state = null, target = null;
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+const chars = (n) => n >= 1000 ? Math.round(n / 1000) + 'k' : String(n);
+const ttl = (s) => !s ? 'off' : s >= 86400 ? Math.round(s / 86400) + ' day' + (s >= 172800 ? 's' : '') : Math.round(s / 3600) + ' h';
+const ROWS = [
+  ['Price', p => p.price_usd_month ? usd(p.price_usd_month, 2) + ' / month' : 'Free'],
+  ['Model spend included', p => usd(p.monthly_budget_usd, 2) + ' / month'],
+  ['Requests per minute (per key)', p => int(p.rpm)],
+  ['Max input per request', p => chars(p.max_input_chars) + ' chars'],
+  ['Long documents (map-reduce)', p => p.map_reduce_max_chars ? 'up to ' + chars(p.map_reduce_max_chars) + ' chars' : '–'],
+  ['Response cache', p => ttl(p.cache_ttl_s)],
+  ['Models', p => p.models.length],
+];
+const rank = (p) => state.plans.findIndex(x => x.id === p.id);
+function render() {
+  const cur = state.plans.find(p => p.id === state.plan);
+  $('#current').textContent = cap(state.plan) + ' plan';
+  $('#plans').innerHTML = state.plans.map(p => {
+    const on = p.id === state.plan, up = rank(p) > rank(cur);
+    return `<div class="card plan ${on ? 'current' : ''}">
+      <h2>${esc(p.id)} ${on ? '<span class="badge">Current</span>' : ''}</h2>
+      <div class="price">${p.price_usd_month ? usd(p.price_usd_month, 0) : '$0'} <small>/ month</small></div>
+      <ul class="feat"><li>${usd(p.monthly_budget_usd, 2)} of model spend a month</li><li>${int(p.rpm)} requests / min per key</li>
+        <li>${chars(p.max_input_chars)}-character inputs</li>
+        ${p.map_reduce_max_chars ? `<li>Long documents up to ${chars(p.map_reduce_max_chars)} chars</li>` : ''}
+        <li>${p.models.length} models</li><li>Response cache ${ttl(p.cache_ttl_s)}</li></ul>
+      <button class="btn ${up ? 'primary' : ''}" data-plan="${esc(p.id)}" ${on || state.status !== 'active' ? 'disabled' : ''}>
+        ${on ? 'Current plan' : (up ? 'Upgrade to ' : 'Switch to ') + esc(cap(p.id))}</button></div>`;
+  }).join('');
+  $('#cmp-head').innerHTML = '<tr><th></th>' + state.plans.map(p => `<th style="text-transform:capitalize">${esc(p.id)}${p.id === state.plan ? ' <span class="badge">Current</span>' : ''}</th>`).join('') + '</tr>';
+  $('#cmp').innerHTML = ROWS.map(([label, f]) => `<tr><td>${esc(label)}</td>${state.plans.map(p => `<td>${esc(f(p))}</td>`).join('')}</tr>`).join('');
+  $('#payments').innerHTML = state.payments.length ? state.payments.map(x => `<tr><td>${day(x.created_at)}</td>
+    <td>${esc(cap(x.plan))} plan <span class="sub" style="font-size:.82rem">(from ${esc(x.previous_plan)})</span></td>
+    <td class="mono">${esc(x.card || '–')}</td><td class="num">${usd(x.amount_usd, 2)}</td>
+    <td><span class="badge ${x.status === 'succeeded' ? 'ok' : 'bad'}">${esc(x.status)}</span></td>
+    <td class="mono sub">${esc(x.reference)}</td></tr>`).join('')
+    : '<tr><td colspan="6" class="empty">No payments yet.</td></tr>';
+  if (state.status !== 'active') $('#banner').innerHTML = '<div class="notice bad">This account is suspended, so the plan cannot be changed.</div>';
+  else if (state.budget_override_usd !== null) $('#banner').innerHTML = `<div class="notice warn">Your account has a custom monthly budget of ${usd(state.budget_override_usd, 2)}, which stays in place whichever plan you pick.</div>`;
+}
+async function load() { state = await api('/billing'); render(); }
+async function change(plan, card) {
+  const j = await api('/billing/plan', {method: 'POST', body: card ? {plan, card} : {plan}});
+  await load();
+  $('#banner').innerHTML = `<div class="notice ok"><span><strong>You're on ${esc(cap(j.plan))}.</strong>&nbsp;${j.payment ? `Paid ${usd(j.payment.amount_usd, 2)} with ${esc(j.payment.card)}. ` : ''}The new limits apply from your next request.</span></div>`;
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+$('#plans').onclick = async (e) => {
+  const b = e.target.closest('button[data-plan]'); if (!b || b.disabled) return;
+  target = state.plans.find(p => p.id === b.dataset.plan);
+  const cur = state.plans.find(p => p.id === state.plan), up = rank(target) > rank(cur);
+  if (!target.price_usd_month) {
+    if (!confirm(`Switch to ${cap(target.id)}? Your monthly budget drops to ${usd(target.monthly_budget_usd, 2)} right away and the current period is not refunded.`)) return;
+    try { await change(target.id); toast('Plan changed'); } catch (err) { toast(err.message); }
+    return;
+  }
+  $('#co-title').textContent = (up ? 'Upgrade to ' : 'Switch to ') + cap(target.id);
+  $('#co-sub').textContent = `${usd(target.monthly_budget_usd, 2)} of model spend a month, ${int(target.rpm)} requests / min per key.` + (up ? '' : ' No refund for the current plan.');
+  $('#co-line').textContent = cap(target.id) + ' plan, billed today';
+  $('#co-amount').textContent = usd(target.price_usd_month, 2);
+  $('#co-pay').textContent = 'Pay ' + usd(target.price_usd_month, 2);
+  $('#co-err').textContent = '';
+  $('#checkout').showModal(); $('#cc-name').focus();
+};
+$('#co-cancel').onclick = () => $('#checkout').close();
+$('#cc-number').oninput = (e) => { e.target.value = e.target.value.replace(/\\D/g, '').slice(0, 19).replace(/(.{4})(?=.)/g, '$1 '); };
+$('#cc-exp').oninput = (e) => { const d = e.target.value.replace(/\\D/g, '').slice(0, 4); e.target.value = d.length > 2 ? d.slice(0, 2) + ' / ' + d.slice(2) : d; };
+$('#cc-cvc').oninput = (e) => { e.target.value = e.target.value.replace(/\\D/g, '').slice(0, 4); };
+$('#pay').onsubmit = async (e) => {
+  e.preventDefault(); $('#co-err').textContent = '';
+  const exp = $('#cc-exp').value.replace(/\\D/g, '');
+  if (exp.length !== 4) { $('#co-err').textContent = 'Enter the expiry as MM / YY.'; return; }
+  const card = {name: $('#cc-name').value, number: $('#cc-number').value, exp_month: +exp.slice(0, 2), exp_year: +exp.slice(2), cvc: $('#cc-cvc').value};
+  $('#co-pay').disabled = true; $('#co-pay').textContent = 'Processing…';
+  try {
+    await change(target.id, card);
+    $('#checkout').close(); $('#pay').reset(); toast('Payment successful');
+  } catch (err) { $('#co-err').textContent = err.message; }
+  finally { $('#co-pay').disabled = false; $('#co-pay').textContent = 'Pay ' + usd(target.price_usd_month, 2); }
+};
+shell('billing').then(load).catch(e => console.error(e));
+"""
+    return _doc("Billing", _shell("billing", content), script)
 
 
 @router.get("/app/")

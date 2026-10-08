@@ -41,6 +41,8 @@ USER_SIGNUP = "user.signup"
 USER_LOGIN = "user.login"
 USER_LOGIN_FAILED = "user.login_failed"
 USER_LOGOUT = "user.logout"
+PLAN_CHANGED = "tenant.plan_changed"
+PAYMENT_SUCCEEDED = "payment.succeeded"
 
 
 def audit(
