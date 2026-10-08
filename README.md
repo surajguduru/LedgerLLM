@@ -133,6 +133,8 @@ Headers on every response: `X-Request-ID`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 | `GET /v1/usage` | current-month spend, remaining budget, tokens, breakdown by model, purpose and UTC day, last 10 ledger rows |
 | `GET /v1/usage/statement.csv?period=YYYY-MM` | itemised statement: every ledger row of the month plus a `TOTAL` line that equals the bill |
 | `POST /v1/feedback` | thumbs up/down on a `request_id` |
+| `GET /app` | **tenant portal**: sign up / sign in, manage API keys, usage per key, daily and monthly spend |
+| `/app/api/*` | portal JSON API (session cookie): `signup`, `login`, `logout`, `me`, `keys` (create, `/{id}/revoke`, `/{id}/rotate`), `usage?period=`, `statement.csv` |
 | `GET /dashboard` | usage/billing page for a tenant (paste a key) |
 | `POST /admin/tenants`, `POST /admin/tenants/{id}/keys`, `GET /admin/tenants` | tenant and key management (`Authorization: Bearer $ADMIN_TOKEN`) |
 | `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus, health, OpenAPI |
@@ -141,6 +143,20 @@ Errors always look like `{"error": {"code": "…", "message": "…", "request_id
 `401 missing_api_key | invalid_api_key` · `403 tenant_suspended | model_not_allowed` · `429 rate_limited` ·
 `402 budget_exceeded` · `400 blocked_input | fetch_blocked` · `422 fetch_failed | validation_error` ·
 `409 idempotency_conflict` · `502 upstream_error`.
+
+## Tenant portal
+
+Open `/app` (the root redirects there). A new customer signs up with an e-mail and password, which creates a tenant on the
+free plan, its first API key (shown once) and a session. Signed in, they can:
+
+- see every API key with its requests, spend and last use this month; create keys up to the plan's limit
+  (free 2, pro 5, enterprise 20), rotate them, revoke them
+- see monthly totals, remaining budget, daily spend stacked by key, spend share per key, recent calls and spend by model,
+  for this month or any of the last six, and download the itemised CSV statement
+
+Passwords are hashed with scrypt; sessions are HttpOnly, SameSite=Strict cookies whose token is stored only as a sha256;
+every state change is a same-origin JSON POST; sign-in is throttled per e-mail and per IP; someone else's key id is
+reported as not found. Admins keep full control through `/admin` and can exceed the key limit. Decision D24.
 
 ## Configuration is versioned, not hardcoded
 

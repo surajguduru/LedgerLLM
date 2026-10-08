@@ -12,6 +12,8 @@ from app.errors import install_error_handlers
 from app.llm import get_provider
 from app.observability.logging import RequestContextMiddleware, configure_logging
 from app.observability.metrics import setup_metrics
+from app.portal import api as portal_api
+from app.portal import pages as portal_pages
 
 
 @asynccontextmanager
@@ -43,12 +45,14 @@ def create_app() -> FastAPI:
         feedback.router,
         admin.router,
         dashboard.router,
+        portal_api.router,
+        portal_pages.router,
     ):
         app.include_router(r)
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:
-        return RedirectResponse("/docs")
+        return RedirectResponse("/app")
 
     return app
 

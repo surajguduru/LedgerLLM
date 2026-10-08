@@ -39,6 +39,9 @@ GUARDRAIL = Counter(
 FEEDBACK = Counter(
     "ledgerllm_feedback_total", "Thumbs up/down", ["rating", "prompt_version"]
 )  # prompt_version lets us compare satisfaction across prompt versions (quality signal, DESIGN.md §4)
+PORTAL_LOGINS = Counter(
+    "ledgerllm_portal_logins_total", "Tenant portal sign-ins", ["result"]
+)  # ok | invalid | throttled | signup
 CACHE = Counter(
     "ledgerllm_cache_total", "Response cache lookups", ["result"]
 )  # hit | miss | bypass

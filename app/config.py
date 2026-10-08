@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # Admin
     admin_token: str = "dev-admin-token-change-me"
 
+    # Tenant portal (/app): session lifetime, and whether the cookie is HTTPS-only. None = secure
+    # everywhere except APP_ENV dev/test, where the app is served over plain http://localhost.
+    portal_session_days: int = 7
+    portal_cookie_secure: bool | None = None
+
     # Versioned config artifacts
     plans_path: Path = ROOT / "config" / "plans.yaml"
     prices_path: Path = ROOT / "config" / "prices.yaml"
