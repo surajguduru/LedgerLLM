@@ -1,0 +1,526 @@
+{
+  "uid": "ledgerllm-admin",
+  "title": "LedgerLLM \u2014 Admin",
+  "description": "Operator/admin view over the production Neon database (read-only replica). Exact values from the ledger and audit tables, durable across restarts. Read-only by design: suspend, revoke, rotate and plan changes go through /admin/*. Owner: Yashraj.",
+  "tags": [
+    "ledgerllm",
+    "admin"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Fleet \u2014 the whole platform at a glance",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Fleet totals",
+      "description": "Straight from the ledger and the tenant tables, so these are exact rather than sampled: the same numbers an invoice would be built from. Month-to-date figures reset on the 1st UTC.",
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "neon"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "neon"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select count(*) as \"Tenants\",\n       (select count(*) from api_keys where revoked_at is null) as \"Active keys\",\n       (select count(*) from users) as \"Portal users\",\n       (select coalesce(sum(cost_microusd),0)/1e6 from usage_ledger\n          where created_at >= date_trunc('month', now())) as \"Spend MTD (USD)\",\n       (select count(distinct request_id) from usage_ledger\n          where created_at >= date_trunc('month', now())) as \"Requests MTD\"\nfrom tenants"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 6
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "row",
+      "title": "Tenants \u2014 who they are and what they owe",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 6
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Tenants, spend and budget",
+      "description": "`limit_usd` is blank until a tenant's first request of the month: the budget_periods row is created on first reserve, and before that the limit lives in config/plans.yaml (or the tenant's override). pct_used is spend against the hard limit, which is what the 402 cutoff compares.",
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 0,
+        "y": 7
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "neon"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "neon"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select t.name as \"Tenant\", t.plan as \"Plan\", t.status as \"Status\",\n       round(coalesce(b.spent_microusd,0)/1e6::numeric, 6) as \"Spent USD\",\n       round(nullif(coalesce(b.hard_limit_microusd, t.budget_override_microusd, 0),0)/1e6::numeric, 2) as \"Limit USD\",\n       case when coalesce(b.hard_limit_microusd,0) > 0\n            then round(100.0*coalesce(b.spent_microusd,0)/b.hard_limit_microusd, 1) end as \"% used\",\n       round(coalesce(b.reserved_microusd,0)/1e6::numeric, 6) as \"Reserved USD\",\n       (select count(*) from api_keys k where k.tenant_id=t.id and k.revoked_at is null) as \"Keys\",\n       (select max(created_at) from usage_ledger l where l.tenant_id=t.id) as \"Last call\"\nfrom tenants t\nleft join budget_periods b on b.tenant_id=t.id and b.period=to_char(now(),'YYYY-MM')\norder by 4 desc"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "% used"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "gradient"
+                }
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 80
+                    },
+                    {
+                      "color": "red",
+                      "value": 100
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ]
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Spend per day by tenant (USD)",
+      "description": "Daily spend from usage_ledger. Exact, and unaffected by restarts \u2014 unlike the Prometheus cost counter on the operational dashboard, which resets with the process.",
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 14,
+        "y": 7
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "neon"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "neon"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select date_trunc('day', l.created_at) as time, t.name as metric,\n       sum(l.cost_microusd)/1e6 as value\nfrom usage_ledger l join tenants t on t.id=l.tenant_id\nwhere $__timeFilter(l.created_at)\ngroup by 1,2 order by 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 6,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "auto",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Latency \u2014 against the targets in DESIGN.md \u00a71",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "End-to-end latency on /v1/summarize",
+      "description": "Exact percentiles over request_logs rows, not a histogram estimate. Target from DESIGN.md \u00a71 is p50 <= 3s and p99 <= 8s; the panel turns red past 8s.",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 17
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "neon"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "neon"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select count(*) as \"Requests\",\n       percentile_disc(0.50) within group (order by latency_ms) as \"p50 ms\",\n       percentile_disc(0.95) within group (order by latency_ms) as \"p95 ms\",\n       percentile_disc(0.99) within group (order by latency_ms) as \"p99 ms\",\n       count(*) filter (where latency_ms > 8000) as \"Over 8s\"\nfrom request_logs where endpoint='/v1/summarize' and status_code=200\n  and $__timeFilter(created_at)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 8000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Platform overhead (end-to-end minus model time)",
+      "description": "Our own cost per request: the HTTP duration from request_logs minus the provider call from the ledger. Target is p99 <= 25ms. In production this is dominated by DATABASE ROUND TRIPS, not CPU - the pipeline makes ~19 database calls per request, so a Render region far from the Neon region adds that many network hops. Measured locally with the database on the same host: 7-10ms.",
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 17
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "neon"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "neon"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select percentile_disc(0.50) within group (order by gap) as \"p50 ms\",\n       percentile_disc(0.95) within group (order by gap) as \"p95 ms\",\n       max(gap) as \"max ms\"\nfrom (select r.latency_ms - coalesce(l.latency_ms,0) as gap\n      from request_logs r\n      left join usage_ledger l on l.request_id=r.request_id and l.purpose='completion'\n      where r.endpoint='/v1/summarize' and r.status_code=200\n        and $__timeFilter(r.created_at)) g"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 25
+              },
+              {
+                "color": "red",
+                "value": 200
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Recent requests",
+      "description": "One row per HTTP request, newest first. error_code is null on success. The model column shows which model actually answered, so a fallback (D19) is visible here.",
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 0,
+        "y": 23
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "neon"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "neon"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select r.created_at as \"When\", t.name as \"Tenant\", r.status_code as \"Status\",\n       r.error_code as \"Error\", r.latency_ms as \"Latency ms\", r.model as \"Model\",\n       round(r.cost_microusd/1e6::numeric, 6) as \"Cost USD\"\nfrom request_logs r left join tenants t on t.id=r.tenant_id\nwhere $__timeFilter(r.created_at)\norder by r.created_at desc limit 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ]
+        }
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Outcomes by error code",
+      "description": "Every refusal reason plus successes. 402 budget_exceeded and 429 rate_limited are designed outcomes, not faults - this is the breakdown the burst test drives.",
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 14,
+        "y": 23
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "neon"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "neon"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select coalesce(error_code, 'ok') as \"Outcome\", count(*) as \"Requests\"\nfrom request_logs where $__timeFilter(created_at)\ngroup by 1 order by 2 desc"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Outcome",
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Audit \u2014 why was this refused, and who changed what",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "Recent audit events",
+      "description": "The answer to a customer asking why they were refused, and the trail of every admin and portal action. Filter the Event column for budget.exceeded, blocked_input, key.revoked, tenant.updated.",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "neon"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "postgres",
+            "uid": "neon"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "select a.created_at as \"When\", a.event_type as \"Event\", a.actor as \"Actor\",\n       t.name as \"Tenant\", a.request_id as \"Request\", a.details::text as \"Details\"\nfrom audit_events a left join tenants t on t.id=a.tenant_id\nwhere $__timeFilter(a.created_at)\norder by a.created_at desc limit 200"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ]
+        }
+      }
+    }
+  ]
+}
