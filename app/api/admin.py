@@ -183,8 +183,13 @@ def update_tenant(
         if payload.status not in ("active", "suspended"):
             raise ApiError(422, "validation_error", "status must be active|suspended")
         tenant.status = payload.status
-    if payload.budget_override_usd is not None:
-        tenant.budget_override_microusd = usd_to_microusd(payload.budget_override_usd)
+    if "budget_override_usd" in payload.model_fields_set:
+        # Explicit null removes the override (back to the plan's budget); an absent field leaves it.
+        tenant.budget_override_microusd = (
+            usd_to_microusd(payload.budget_override_usd)
+            if payload.budget_override_usd is not None
+            else None
+        )
     after = {
         "plan": tenant.plan,
         "status": tenant.status,
