@@ -31,6 +31,17 @@ is absent from it.
 CI subset (`--subset ci`): 8 cases tagged `ci`, small enough for a CI job on Groq's free tier (8,000 tokens/minute
 per model): one per domain for 8 domains, 3 short / 3 medium / 2 long, the numbers-dense sum-013, and two injection
 cases at different positions (start sum-026, middle sum-027). The full 30 cases are run locally and committed.
+
+Known limits (D21):
+- On Groq the eval measures the prompt and pipeline on Qwen, not on the production Gemini model, so a
+  Gemini-specific regression would not show.
+- One judge. With --provider gemini it is a sibling of the summarizer (flash-lite judging flash), and a judge
+  from the same family tends to prefer that family's writing; the Groq pair crosses families for that reason.
+  There is no second judge to report disagreement, and agreement with a human is pending (agreement.py).
+- One case moves by about a point between runs at temperature 0.2, so mean differences under ~0.1 are noise.
+- The CI subset can miss a regression confined to the other 22 cases. A Groq daily quota that runs out
+  mid-run makes judge calls unavailable; above `max_judge_unavailable_rate` the judge half is INCONCLUSIVE
+  (a CI warning, not a failure) while leaks, hit rate and length still gate every case.
 """
 
 from __future__ import annotations
@@ -488,7 +499,8 @@ def worst_cases(rows: list[dict], k: int = 3) -> list[dict]:
 
 
 def default_judge_model(model: str) -> str:
-    """A different model of the same family judges, to reduce self-preference (D21); else the same model."""
+    """The judge paired with a summarizer by DEFAULT_JUDGE_MODELS (gemini-3.8-flash is judged by flash-lite, a
+    sibling: a different model, but same-family bias remains, D21); else the same model."""
     return DEFAULT_JUDGE_MODELS.get(model, model)
 
 

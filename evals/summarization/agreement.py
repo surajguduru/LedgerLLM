@@ -3,9 +3,15 @@
     python -m evals.summarization.agreement            # agreement report (+ how many rows still need scores)
     python -m evals.summarization.agreement --blind    # print source + summary of unscored rows, no judge scores
 
-Each row of calibration.jsonl is one summary from a real `--provider gemini` run: `case` (the golden.jsonl id),
+Each row of calibration.jsonl is one summary from a real judged run: `case` (the golden.jsonl id),
 `run` (results timestamp), the models and prompt, `summary`, the `judge` scores, and `human` scores that start
 as null. Rows are chosen to span good and bad judge scores, so agreement is not measured only on easy cases.
+The five current rows come from the 30-case Groq run (`qwen/qwen3.8-27b` summaries, `openai/gpt-oss-120b`
+judge) and were re-judged after the rubric fix; their human scores are still pending, so this module reports
+no agreement number yet, only how many rows are left.
+
+Known limits: five rows from one human say whether the judge is roughly right, not how often it is wrong; and
+agreement on Qwen summaries says nothing direct about how the judge treats the production model's summaries.
 
 Human scoring procedure (by hand, never generated):
   1. Run with --blind. It prints the source document and the summary, and hides the judge's scores.
