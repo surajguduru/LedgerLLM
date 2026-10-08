@@ -4,9 +4,12 @@ OWNER: Yashraj. Served by the API rather than as a separate app so there is one 
 URL (decision D14). Dependency-free apart from Chart.js off a CDN; nothing is persisted in the
 browser, so the pasted key never outlives the tab.
 
-Three panels depend on fields Naresh is still adding to GET /v1/usage (`by_day`, `last_requests`) and
-on GET /v1/usage/statement.csv. They degrade to a short "pending" note instead of breaking, and start
-working on their own once those ship -- no change needed here.
+`by_day`, `last_requests` and GET /v1/usage/statement.csv all ship now (Naresh, PR #20), so every
+panel renders. The feature-detection is kept as a safety net: if a field ever disappears the panel
+shows a short note instead of throwing and taking the rest of the page down with it.
+
+Note that `last_requests` are LEDGER rows, not HTTP requests -- one request can produce several (the
+completion plus any guardrail or judge call), and a judge row is marked not billed (D17).
 """
 
 from __future__ import annotations
@@ -151,7 +154,10 @@ async function load() {
       { label: 'Cost', num: true, cell: p => usd(p.cost_usd) },
     ])}
 
-    <h3>Recent requests</h3>
+    <h3>Recent billable calls</h3>
+    <p class="muted" style="font-size:.85rem;margin:0">The 10 most recent ledger rows, newest
+      first. One request can appear more than once: the completion plus any guardrail or judge
+      call it triggered. Rows marked <em>not billed</em> are ours, not yours.</p>
     <div id="recent"></div>
 
     <h3>Statement</h3>
@@ -200,7 +206,7 @@ function drawByDay(j) {
   charts.push(new Chart($('daychart'), {
     type: 'bar',
     data: {
-      labels: j.by_day.map(d => d.day),
+      labels: j.by_day.map(d => d.date),
       datasets: [{ label: 'Cost (USD)', data: j.by_day.map(d => d.cost_usd), backgroundColor: '#4a6fa5' }],
     },
     options: {
@@ -223,11 +229,14 @@ function drawRecent(j) {
   el.innerHTML = rows(j.last_requests.slice(0, 10), [
     { label: 'When', cell: q => esc(q.created_at || '') },
     { label: 'Request', cell: q => '<code>' + esc(String(q.request_id || '').slice(0, 12)) + '</code>' },
-    { label: 'Status', cell: q => q.status_code === 200
-        ? '200' : '<span class="warn">' + esc(q.status_code) + ' ' + esc(q.error_code || '') + '</span>' },
+    { label: 'Purpose', cell: q => esc(q.purpose || '—') },
     { label: 'Model', cell: q => esc(q.model || '—') },
-    { label: 'Latency', num: true, cell: q => (q.latency_ms ?? '—') + ' ms' },
-    { label: 'Cost', num: true, cell: q => q.cost_usd != null ? usd(q.cost_usd) : '—' },
+    { label: 'Status', cell: q => q.status === 'ok'
+        ? 'ok' : '<span class="warn">' + esc(q.status || '?') + '</span>' },
+    { label: 'Tokens in / out', num: true, cell: q => `${q.input_tokens ?? '—'} / ${q.output_tokens ?? '—'}` },
+    { label: 'Cost', num: true, cell: q => q.billed === false
+        ? '<span class="muted">not billed</span>'
+        : (q.cost_usd != null ? usd(q.cost_usd) : '—') },
   ]);
 }
 
