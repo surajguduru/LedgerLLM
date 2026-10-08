@@ -1,5 +1,8 @@
 """Admin API. OWNER: Loukik."""
 
+import pytest
+
+from app.config import get_settings
 from tests.conftest import ADMIN, make_tenant, summarize
 
 
@@ -96,3 +99,46 @@ def test_audit_pagination_and_filters(client):
 def test_admin_requires_token(client):
     assert client.get("/admin/tenants").status_code == 401
     assert client.get("/admin/audit").status_code == 401
+
+
+def _active_keys(client, tenant_id):
+    keys = client.get(f"/admin/tenants/{tenant_id}/keys", headers=ADMIN).json()
+    return [k for k in keys if k["revoked_at"] is None]
+
+
+def test_rotating_a_revoked_key_is_refused(client):
+    """A retried or double-clicked rotate must not leave an extra live key behind."""
+    t = make_tenant(client)
+    tid, key_id = t["tenant"]["id"], t["key"]["id"]
+    assert client.post(f"/admin/keys/{key_id}/rotate", headers=ADMIN).status_code == 201
+    again = client.post(f"/admin/keys/{key_id}/rotate", headers=ADMIN)
+    assert again.status_code == 409, again.text
+    assert again.json()["error"]["code"] == "key_revoked"
+    assert len(_active_keys(client, tid)) == 1
+
+    revoked = client.post(f"/admin/tenants/{tid}/keys", json={"name": "old"}, headers=ADMIN).json()
+    client.delete(f"/admin/keys/{revoked['key']['id']}", headers=ADMIN)
+    r = client.post(f"/admin/keys/{revoked['key']['id']}/rotate", headers=ADMIN)
+    assert r.json()["error"]["code"] == "key_revoked"
+    assert len(_active_keys(client, tid)) == 1
+
+
+@pytest.mark.skipif(
+    not get_settings().database_url.startswith("postgresql"),
+    reason="in-memory SQLite shares one connection across threads; only Postgres proves this",
+)
+def test_concurrent_rotations_mint_one_key(client):
+    from concurrent.futures import ThreadPoolExecutor
+
+    t = make_tenant(client)
+    with ThreadPoolExecutor(5) as pool:
+        statuses = list(
+            pool.map(
+                lambda _: (
+                    client.post(f"/admin/keys/{t['key']['id']}/rotate", headers=ADMIN).status_code
+                ),
+                range(5),
+            )
+        )
+    assert sorted(statuses) == [201, 409, 409, 409, 409], statuses
+    assert len(_active_keys(client, t["tenant"]["id"])) == 1

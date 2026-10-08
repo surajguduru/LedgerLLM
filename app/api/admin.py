@@ -8,7 +8,7 @@ from __future__ import annotations
 import secrets
 
 from fastapi import APIRouter, Depends, Header
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.auth.keys import generate_key
@@ -189,8 +189,16 @@ def rotate_key(key_id: str, db: Session = Depends(get_db)) -> CreateKeyResponse:
     old = db.get(ApiKey, key_id)
     if old is None:
         raise ApiError(404, "key_not_found", "no such key")
-    if old.revoked_at is None:
-        old.revoked_at = utcnow()
+    # Revoke-and-replace happens once: a retried, double-clicked or concurrent rotate of the same key
+    # loses the conditional UPDATE and gets 409 instead of minting a second live key.
+    won = db.execute(
+        update(ApiKey)
+        .where(ApiKey.id == key_id, ApiKey.revoked_at.is_(None))
+        .values(revoked_at=utcnow())
+    ).rowcount
+    if won != 1:
+        db.rollback()
+        raise ApiError(409, "key_revoked", "key is already revoked or rotated; rotate the live key")
     raw, prefix, digest = generate_key()
     new = ApiKey(tenant_id=old.tenant_id, name=old.name, key_prefix=prefix, key_hash=digest)
     db.add(new)
