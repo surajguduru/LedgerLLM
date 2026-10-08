@@ -13,7 +13,7 @@ Codes and statuses (keep this table in sync with docs/DESIGN.md):
     401 admin_unauthorized                     500 internal_error
     404 tenant_not_found / key_not_found       409 key_revoked (rotate of a revoked key)
     Tenant portal (/app/api): 401 not_signed_in / session_expired / invalid_credentials,
-    409 email_taken / key_limit_reached, 403 cross_origin, 415 unsupported_media_type
+    409 email_taken, 403 cross_origin, 415 unsupported_media_type
 """
 
 from __future__ import annotations

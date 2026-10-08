@@ -10,7 +10,6 @@ soft_warning_fraction: 0.8   # past this share of the monthly budget: X-Budget-W
 plans:
   free:
     rpm: 5
-    max_api_keys: 2        # live keys a tenant may create in the portal (admins can exceed it)
     monthly_budget_usd: 0.50
     max_input_chars: 20000
     cache_ttl_s: 3600        # identical request served from cache for 1 h; 0 = off
@@ -18,7 +17,6 @@ plans:
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, mock]
   pro:
     rpm: 60
-    max_api_keys: 5        # live keys a tenant may create in the portal (admins can exceed it)
     monthly_budget_usd: 10.00
     max_input_chars: 60000
     map_reduce_max_chars: 240000   # typically 4-5 chunks + 1 reduce
@@ -27,7 +25,6 @@ plans:
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, mock]
   enterprise:
     rpm: 600
-    max_api_keys: 20        # live keys a tenant may create in the portal (admins can exceed it)
     monthly_budget_usd: 100.00
     max_input_chars: 120000
     map_reduce_max_chars: 600000   # typically 5-6 chunks + 1 reduce

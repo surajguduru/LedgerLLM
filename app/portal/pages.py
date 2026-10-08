@@ -89,6 +89,33 @@ background:radial-gradient(60rem 30rem at 10% -10%,var(--accent-soft),transparen
 .auth input{width:100%} .auth .alt{margin-top:18px;text-align:center;color:var(--muted);font-size:.9rem}
 .err{color:var(--bad);font-size:.88rem;margin-top:12px;min-height:1.2em}
 .chart{position:relative;height:280px}
+.seg{display:inline-flex;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:3px;gap:2px}
+.seg button{border:0;background:transparent;color:var(--muted);font:inherit;font-weight:600;font-size:.85rem;
+padding:6px 12px;border-radius:7px;cursor:pointer}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(16,24,40,.08)}
+.play{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);align-items:start}
+@media (max-width:960px){.play{grid-template-columns:1fr}}
+.field{margin-top:16px} .field:first-child{margin-top:0}
+.field label{margin:0 0 6px;display:flex;justify-content:space-between;align-items:baseline}
+.field label small{color:var(--muted);font-weight:400}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+textarea{width:100%;font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;
+padding:10px 12px;outline:none;resize:vertical;min-height:180px;line-height:1.5}
+textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.field select,.field input[type=text],.field input[type=url]{width:100%}
+input[type=range]{width:100%;accent-color:var(--accent);padding:0;border:0;box-shadow:none}
+.check{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.88rem;margin:0}
+.check input{width:auto;padding:0;box-shadow:none}
+.result{min-height:420px;display:flex;flex-direction:column}
+.placeholder{flex:1;display:grid;place-items:center;text-align:center;color:var(--muted);padding:40px 20px}
+.summary{font-size:1rem;line-height:1.65} .summary ul{padding-left:20px;margin:8px 0} .summary li{margin:4px 0}
+.summary p{margin:0 0 10px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+.chip{background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:.8rem;color:var(--muted)}
+.chip b{color:var(--ink);font-weight:600}
+.spin{width:28px;height:28px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--accent);
+animation:sp .8s linear infinite;margin:0 auto 12px} @keyframes sp{to{transform:rotate(360deg)}}
+.history td{padding:9px 12px;font-size:.88rem;cursor:pointer} .history tr:hover td{background:var(--bg)}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);
 padding:10px 16px;border-radius:10px;font-size:.9rem;opacity:0;transition:opacity .2s;pointer-events:none}
 .toast.on{opacity:1}
@@ -147,7 +174,7 @@ def _doc(title: str, body: str, script: str, charts: bool = False) -> HTMLRespon
 def _shell(active: str, content: str) -> str:
     return f"""<header class="top"><div class="top-in">
 <a class="brand" href="/app"><span class="logo">L</span>LedgerLLM</a>
-<nav class="nav"><a id="nav-overview" href="/app">Overview</a><a id="nav-keys" href="/app/keys">API keys</a>
+<nav class="nav"><a id="nav-overview" href="/app">Overview</a><a id="nav-playground" href="/app/playground">Playground</a><a id="nav-keys" href="/app/keys">API keys</a>
 <a href="/docs" target="_blank" rel="noopener">API docs ↗</a></nav>
 <div class="who"><span id="who"></span><button class="btn sm" id="logout">Sign out</button></div>
 </div></header><main>{content}</main>"""
@@ -194,7 +221,7 @@ async function submit() {
 def signup_page() -> HTMLResponse:
     return _auth(
         "Create your account",
-        "Free plan: $0.50 of model spend a month, 2 API keys. No card needed.",
+        "Free plan: $0.50 of model spend a month. No card needed.",
         """<label for="company">Company <span class="sub">(optional)</span></label><input id="company" autocomplete="organization">
 <label for="email">Work e-mail</label><input id="email" type="email" autocomplete="email" required>
 <label for="password">Password</label><input id="password" type="password" autocomplete="new-password" minlength="10" required>
@@ -321,10 +348,7 @@ function reveal(raw, label) {
 }
 async function load() {
   const k = await api('/keys');
-  $('#count').textContent = `${k.live} / ${k.limit} live keys`;
-  const full = k.live >= k.limit;
-  $('#create-btn').disabled = full;
-  $('#err').textContent = full ? 'You have reached your plan\\'s key limit. Revoke a key to create a new one.' : '';
+  $('#count').textContent = `${k.live} live key${k.live === 1 ? '' : 's'}`;
   const keys = [...k.keys].sort((a, b) => (!!a.revoked_at - !!b.revoked_at) || (b.created_at > a.created_at ? 1 : -1));
   $('#rows').innerHTML = keys.length ? keys.map(x => `<tr style="${x.revoked_at ? 'opacity:.55' : ''}">
     <td style="font-weight:600">${esc(x.name)}</td><td class="mono">${esc(x.key_prefix)}…</td>
@@ -361,6 +385,144 @@ shell('keys').then(() => {
 }).catch(e => console.error(e));
 """
     return _doc("API keys", _shell("keys", content), script)
+
+
+@router.get("/app/playground")
+def playground_page() -> HTMLResponse:
+    content = """
+<div class="head"><div><h1>Playground</h1><p class="sub">Run real <code>POST /v1/summarize</code> calls with one of your keys.
+Rate limits, budget, guardrails and caching apply, and every call is billed to the key you pick.</p></div></div>
+<div class="grid play">
+ <form class="card" id="form">
+  <div class="row2">
+   <div class="field"><label for="key">API key</label><select id="key"></select><small class="sub" style="display:block;font-size:.78rem;margin-top:6px">usage is billed to this key</small></div>
+   <div class="field"><label for="model">Model</label><select id="model"></select><small class="sub" id="price" style="display:block;font-size:.78rem;margin-top:6px"></small></div>
+  </div>
+  <div class="field"><label>Source <span class="seg" id="src"><button type="button" data-v="text" class="on">Text</button><button type="button" data-v="url">URL</button></span></label>
+   <textarea id="text" placeholder="Paste an article, a report, meeting notes…"></textarea>
+   <input id="url" type="url" placeholder="https://en.wikipedia.org/wiki/Token_bucket" style="display:none;width:100%">
+   <div style="margin-top:6px;display:flex;justify-content:space-between"><a href="#" id="sample" style="font-size:.85rem">Use a sample text</a><small class="sub" id="chars"></small></div></div>
+  <div class="row2">
+   <div class="field"><label>Style</label><span class="seg" id="style"><button type="button" data-v="bullets" class="on">Bullets</button><button type="button" data-v="paragraph">Paragraph</button><button type="button" data-v="tldr">TL;DR</button></span></div>
+   <div class="field"><label for="words">Max words <small id="words-v">150</small></label><input id="words" type="range" min="20" max="600" step="10" value="150"></div>
+  </div>
+  <div class="field"><label for="instructions">Instructions <small>optional</small></label>
+   <input id="instructions" type="text" maxlength="500" placeholder="e.g. focus on pricing changes"></div>
+  <div class="field" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+   <label class="check"><input type="checkbox" id="bypass"> Bypass cache</label>
+   <button class="btn primary" id="run" type="submit" style="min-width:140px">Summarize</button></div>
+ </form>
+ <div>
+  <div class="card result" id="result"><div class="placeholder"><div><div style="font-size:2rem">✨</div>
+   <p style="margin:6px 0 0">Your summary will appear here.</p><p class="sub" style="font-size:.85rem">Pick a key and a model, add some text or a URL, then press Summarize.</p></div></div></div>
+  <div class="card section" id="hist-card" style="display:none"><h2>This session</h2>
+   <table class="history"><thead><tr><th>When</th><th>Model</th><th>Key</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead><tbody id="hist"></tbody></table></div>
+ </div>
+</div>"""
+    script = r"""
+const SAMPLE = `LedgerLLM is a multi-tenant API that exposes a summarization feature behind API keys. Each tenant has a plan
+with a requests-per-minute limit and a monthly budget in US dollars. Every request's token cost is booked to a ledger in
+integer micro-USD, so a bill can always be reproduced. Before calling the model, the service atomically reserves the
+worst-case cost of the request; afterwards it settles the actual cost and releases the rest. A burst of concurrent
+requests therefore cannot overspend the budget. Inputs are screened for prompt injection, outputs are moderated, logs
+are redacted, and identical requests are served from a per-tenant cache at no charge.`;
+let models = {}, keys = {}, history = [];
+const pick = (id) => $(id + ' .on').dataset.v;
+function seg(id, onChange) {
+  $(id).onclick = (e) => { const b = e.target.closest('button'); if (!b) return;
+    $(id).querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); onChange && onChange(b.dataset.v); };
+}
+seg('#src', v => { $('#text').style.display = v === 'text' ? '' : 'none'; $('#url').style.display = v === 'url' ? '' : 'none'; $('#sample').style.visibility = v === 'text' ? 'visible' : 'hidden'; $('#chars').textContent = ''; });
+seg('#style');
+$('#words').oninput = () => $('#words-v').textContent = $('#words').value;
+$('#text').oninput = () => $('#chars').textContent = $('#text').value.length ? int($('#text').value.length) + ' characters' : '';
+$('#sample').onclick = (e) => { e.preventDefault(); $('#text').value = SAMPLE.replace(/\n/g, ' '); $('#text').oninput(); };
+$('#model').onchange = () => { const m = models[$('#model').value];
+  $('#price').textContent = m ? `$${m.input_usd_per_mtok} in · $${m.output_usd_per_mtok} out per 1M tokens` : ''; };
+function renderSummary(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length && lines.every(l => /^[-*•]\s/.test(l))) return '<ul>' + lines.map(l => `<li>${esc(l.replace(/^[-*•]\s+/, ''))}</li>`).join('') + '</ul>';
+  return lines.map(l => `<p>${esc(l)}</p>`).join('');
+}
+const FRIENDLY = {
+  budget_exceeded: "This month's budget is used up for this tenant. Calls resume next month or after a plan change.",
+  rate_limited: 'Too many requests for this key this minute. Wait a moment and try again.',
+  blocked_input: 'The input guardrail flagged this request as a likely prompt injection, so no model was called and nothing was billed.',
+  model_not_allowed: "That model isn't available on your plan.",
+  fetch_blocked: "That URL points somewhere we don't fetch from (private or internal address).",
+  fetch_failed: "We couldn't fetch that URL.",
+  upstream_error: 'The model provider failed. Nothing was billed; try again shortly.',
+  invalid_api_key: 'That key is revoked. Pick a live key.',
+  validation_error: 'Check the inputs.'
+};
+function show(r) {
+  const u = r.usage, b = r.budget, g = r.guardrails || {};
+  const verdict = (v) => v && v.blocked ? `<span class="badge bad">${esc(v.category || 'flagged')}</span>` : '<span class="badge ok">pass</span>';
+  $('#result').innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+     <h2>Summary</h2><button class="btn sm" id="copy-sum">Copy</button></div>
+    ${b.warning ? `<div class="notice warn">Over 80% of this month's budget is committed.</div>` : ''}
+    <div class="summary">${renderSummary(r.summary)}</div>
+    <div class="chips">
+      <span class="chip">model <b>${esc(u.model)}</b></span>
+      ${u.fallback_from ? `<span class="chip">fell back from <b>${esc(u.fallback_from)}</b></span>` : ''}
+      <span class="chip">cost <b>${usd(u.cost_usd)}</b></span>
+      <span class="chip">tokens <b>${int(u.input_tokens)}</b> in · <b>${int(u.output_tokens)}</b> out</span>
+      <span class="chip">model latency <b>${int(u.latency_ms)} ms</b></span>
+      ${u.cached ? '<span class="chip"><b>served from cache</b> · free</span>' : ''}
+      ${r.source.truncated ? '<span class="chip"><b>input truncated</b></span>' : ''}
+      ${r.source.strategy && r.source.strategy !== 'full' ? `<span class="chip">strategy <b>${esc(r.source.strategy)}</b></span>` : ''}
+      <span class="chip">budget <b>${usd(b.spent_usd)}</b> of ${usd(b.limit_usd, 2)}</span>
+      <span class="chip">input guardrail ${verdict(g.input)}</span><span class="chip">output ${verdict(g.output)}</span>
+    </div>
+    <p class="sub" style="font-size:.78rem;margin-top:12px">request ${esc(r.request_id)} · prompt ${esc(u.prompt_version)} · prices ${esc(u.price_version)}</p>`;
+  $('#copy-sum').onclick = async () => { await navigator.clipboard.writeText(r.summary); toast('Summary copied'); };
+}
+function addHistory(r, keyId) {
+  history.unshift({at: new Date(), r, keyId}); history = history.slice(0, 8);
+  $('#hist-card').style.display = '';
+  $('#hist').innerHTML = history.map((h, i) => `<tr data-i="${i}"><td>${h.at.toLocaleTimeString()}</td><td>${esc(h.r.usage.model)}</td>
+    <td>${esc((keys[h.keyId] || {}).name || '')}</td><td class="num">${int(h.r.usage.input_tokens + h.r.usage.output_tokens)}</td>
+    <td class="num">${h.r.usage.cached ? 'cached' : usd(h.r.usage.cost_usd)}</td></tr>`).join('');
+}
+$('#hist').onclick = (e) => { const tr = e.target.closest('tr'); if (tr) show(history[+tr.dataset.i].r); };
+$('#form').onsubmit = async (e) => {
+  e.preventDefault();
+  const src = pick('#src'), body = {key_id: $('#key').value, model: $('#model').value, style: pick('#style'),
+    max_words: +$('#words').value, bypass_cache: $('#bypass').checked};
+  if ($('#instructions').value.trim()) body.instructions = $('#instructions').value.trim();
+  if (src === 'text') { if (!$('#text').value.trim()) return toast('Add some text first'); body.text = $('#text').value; }
+  else { if (!$('#url').value.trim()) return toast('Add a URL first'); body.url = $('#url').value.trim(); }
+  $('#run').disabled = true; $('#run').textContent = 'Summarizing…';
+  $('#result').innerHTML = '<div class="placeholder"><div><div class="spin"></div>Calling the model…</div></div>';
+  try {
+    const r = await fetch('/app/api/playground/summarize', {method: 'POST', credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    if (r.status === 401 && (await r.clone().json()).error.code !== 'invalid_api_key') { location.href = '/app/login'; return; }
+    const j = await r.json();
+    if (!r.ok) {
+      const c = (j.error || {}).code || 'error', retry = r.headers.get('Retry-After');
+      $('#result').innerHTML = `<div class="placeholder"><div style="max-width:420px"><div style="font-size:2rem">⚠️</div>
+        <h2 style="margin-top:6px">${esc(c.replace(/_/g, ' '))}</h2><p class="sub">${esc(FRIENDLY[c] || '')}</p>
+        <p class="mono sub" style="font-size:.8rem;margin-top:8px">HTTP ${r.status} · ${esc((j.error || {}).message || '')}${retry ? ' · retry after ' + esc(retry) + ' s' : ''}</p></div></div>`;
+      return;
+    }
+    show(j); addHistory(j, body.key_id);
+  } catch (err) { $('#result').innerHTML = `<div class="placeholder"><div><p>${esc(err.message)}</p></div></div>`; }
+  finally { $('#run').disabled = false; $('#run').textContent = 'Summarize'; }
+};
+shell('playground').then(async () => {
+  const [m, k] = await Promise.all([api('/models'), api('/keys')]);
+  m.models.forEach(x => models[x.id] = x);
+  $('#model').innerHTML = m.models.map(x => `<option value="${esc(x.id)}" ${x.id === m.default ? 'selected' : ''}>${esc(x.id)}${x.id === 'mock' ? ' (offline test model)' : ''}</option>`).join('');
+  $('#model').onchange();
+  const live = k.keys.filter(x => !x.revoked_at);
+  live.forEach(x => keys[x.key_id] = x);
+  $('#key').innerHTML = live.length ? live.map(x => `<option value="${esc(x.key_id)}">${esc(x.name)} · ${esc(x.key_prefix)}…</option>`).join('')
+    : '<option value="">No live keys: create one first</option>';
+  $('#run').disabled = !live.length;
+}).catch(e => console.error(e));
+"""
+    return _doc("Playground", _shell("playground", content), script)
 
 
 @router.get("/app/")

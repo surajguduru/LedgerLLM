@@ -17,16 +17,20 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.summarize import summarize as run_summarize
 from app.auth import keys
+from app.auth.dependency import AuthContext
 from app.billing import budget
+from app.billing.pricing import load_prices
 from app.billing.usage import daily_by_key, statement_csv, summarize_usage, usage_by_key
 from app.compliance import audit as audit_events
 from app.compliance.audit import audit
+from app.config import Settings, get_settings
 from app.db import get_db
 from app.errors import ApiError
 from app.models import ApiKey, Tenant, User, utcnow
 from app.observability import metrics
-from app.plans import get_plan
+from app.observability.logging import note_tenant
 from app.portal.passwords import DUMMY_HASH, MIN_LENGTH, hash_password, verify_password
 from app.portal.sessions import (
     PortalContext,
@@ -35,6 +39,7 @@ from app.portal.sessions import (
     require_same_origin,
     start_session,
 )
+from app.schemas import SummarizeRequest
 from app.traffic.ratelimit import hit
 
 router = APIRouter(prefix="/app/api", tags=["portal"])
@@ -58,6 +63,11 @@ class SignupRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str = Field(..., max_length=254)
     password: str = Field(..., max_length=200)
+
+
+class PlaygroundRequest(SummarizeRequest):
+    key_id: str = Field(..., description="one of your live keys; the call is billed to it")
+    bypass_cache: bool = False
 
 
 class KeyRequest(BaseModel):
@@ -86,7 +96,6 @@ def _client_ip(request: Request) -> str:
 
 
 def _me(ctx_user: User, tenant: Tenant, db: Session) -> dict:
-    plan = get_plan(tenant.plan)
     return {
         "user": {"email": ctx_user.email},
         "tenant": {
@@ -95,7 +104,7 @@ def _me(ctx_user: User, tenant: Tenant, db: Session) -> dict:
             "plan": tenant.plan,
             "status": tenant.status,
         },
-        "keys": {"live": _live_keys(db, tenant.id), "limit": plan.max_api_keys},
+        "keys": {"live": _live_keys(db, tenant.id)},
     }
 
 
@@ -244,7 +253,6 @@ def list_keys(ctx: PortalContext = Depends(current_user), db: Session = Depends(
     period = budget.current_period()
     return {
         "period": period,
-        "limit": ctx.plan.max_api_keys,
         "live": _live_keys(db, ctx.tenant.id),
         "keys": usage_by_key(db, ctx.tenant, period),
     }
@@ -256,15 +264,6 @@ def create_key(
 ) -> dict:
     if ctx.tenant.status != "active":
         raise ApiError(403, "tenant_suspended", "this account is suspended")
-    # Lock the tenant row so two concurrent creates cannot both pass the limit check (Postgres).
-    db.execute(select(Tenant.id).where(Tenant.id == ctx.tenant.id).with_for_update())
-    if _live_keys(db, ctx.tenant.id) >= ctx.plan.max_api_keys:
-        db.rollback()
-        raise ApiError(
-            409,
-            "key_limit_reached",
-            f"the {ctx.plan.name} plan allows {ctx.plan.max_api_keys} live keys; revoke one first",
-        )
     key, raw = keys.create_key(db, ctx.tenant.id, payload.name.strip(), actor=ACTOR)
     db.commit()
     return {"key": _key_out(key), "api_key": raw}
@@ -287,7 +286,7 @@ def rotate_key(
     if ctx.tenant.status != "active":
         raise ApiError(403, "tenant_suspended", "this account is suspended")
     key = _own_key(db, ctx, key_id)
-    new, raw = keys.rotate_key(db, key, actor=ACTOR)  # count unchanged: no limit
+    new, raw = keys.rotate_key(db, key, actor=ACTOR)
     db.commit()
     return {"key": _key_out(new), "api_key": raw, "rotated_from": key.id}
 
@@ -322,4 +321,62 @@ def statement(
         content=statement_csv(db, ctx.tenant, period),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="ledgerllm-{period}.csv"'},
+    )
+
+
+# --- playground --------------------------------------------------------------------------------
+
+
+@router.get("/models")
+def models(
+    ctx: PortalContext = Depends(current_user), settings: Settings = Depends(get_settings)
+) -> dict:
+    """Models the tenant's plan may call, with list prices, so the playground can offer a choice."""
+    prices = load_prices()
+    default = ctx.plan.default_model or settings.default_model
+    return {
+        "default": default if default in ctx.plan.allowed_models else ctx.plan.allowed_models[0],
+        "price_version": prices.version,
+        "models": [
+            {
+                "id": m,
+                "input_usd_per_mtok": prices.get(m).input_usd_per_mtok,
+                "output_usd_per_mtok": prices.get(m).output_usd_per_mtok,
+            }
+            for m in ctx.plan.allowed_models
+        ],
+    }
+
+
+@router.post("/playground/summarize", dependencies=[Depends(require_same_origin)])
+def playground_summarize(
+    payload: PlaygroundRequest,
+    request: Request,
+    response: Response,
+    ctx: PortalContext = Depends(current_user),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Runs the real POST /v1/summarize pipeline as one of the tenant's own keys.
+
+    The session proves ownership, so the raw key (shown only once) is never needed. Rate limit,
+    budget, guardrails, cache and ledger all apply exactly as for an API call with that key.
+    """
+    key = _own_key(db, ctx, payload.key_id)
+    if key.revoked_at is not None:
+        raise ApiError(401, "invalid_api_key", "that key is revoked; pick a live key")
+    if ctx.tenant.status != "active":
+        raise ApiError(403, "tenant_suspended", "tenant is not active")
+    key.last_used_at = utcnow()
+    note_tenant(request, ctx.tenant.id)
+    body = SummarizeRequest(**payload.model_dump(exclude={"key_id", "bypass_cache"}))
+    return run_summarize(
+        body,
+        request,
+        response,
+        db=db,
+        auth=AuthContext(tenant=ctx.tenant, api_key=key, plan=ctx.plan),
+        settings=settings,
+        idempotency_key=None,
+        cache_control="no-cache" if payload.bypass_cache else None,
     )
