@@ -264,6 +264,18 @@ latency histograms. Grafana dashboards are provisioned
 from `ops/grafana/dashboards/`. Logs are JSON with a `request_id` on every line; the `request_logs` (redacted)
 and `audit_events` tables explain every refusal after the fact.
 
+## Security & compliance
+
+API keys are `llk_<prefix>_<secret}`; only the SHA-256 hash is stored, the raw key is shown once at
+creation/rotation. Admin routes need `Authorization: Bearer <ADMIN_TOKEN>` (constant-time compare).
+Every request/response is persisted redacted (`email`, `phone`, Luhn-validated `credit_card`, `aadhaar`,
+`pan`, `secret` incl. `sk-`/`AIza`/`llk_`, `ipv4` — specific → generic order, `evals/redaction/cases.jsonl`
+has 22 cases incl. Luhn/order-id negatives). Audit rows (`audit_events`) record tenant-caused refusals
+(`model_not_allowed`, `fetch_blocked`, `blocked_input`, `rate_limited`, `budget_exceeded`) plus key/tenant
+lifecycle; transport noise (`fetch_failed`) is request-log only. Audit `details` are PII-redacted.
+Query the trail newest-first: `GET /admin/audit?tenant_id=&event_type=&limit=50&before=`. Suspended
+tenants get 403 `tenant_suspended`; revoked keys get 401.
+
 ## Deployment
 
 Docker image (`Dockerfile`) deployed as a Render web service via `render.yaml`, with a Neon Postgres database

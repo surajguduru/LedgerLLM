@@ -290,13 +290,13 @@ def _pipeline(
             request_id=request_id,
             auth=auth,
             latency_ms=elapsed(),
-            audit_type=None,
+            audit_type=audit_events.MODEL_NOT_ALLOWED,
+            details={"model": model, "plan": plan.name},
         )
     if payload.url:
         try:
             page = fetch_url(str(payload.url), settings)
         except FetchBlocked as exc:
-            # SSRF guard refusal. TODO(Loukik): a fetch.blocked audit event in app/compliance/audit.py
             raise _fail(
                 db,
                 status=400,
@@ -305,10 +305,13 @@ def _pipeline(
                 request_id=request_id,
                 auth=auth,
                 latency_ms=elapsed(),
-                audit_type=None,
+                audit_type=audit_events.FETCH_BLOCKED,
+                details={"url": str(payload.url)},
                 raw_input=raw_for_log,
             ) from exc
         except FetchError as exc:
+            # Policy: fetch_failed is infrastructure noise (DNS/timeout on an
+            # allowed URL) — request log only, no audit row.
             raise _fail(
                 db,
                 status=422,

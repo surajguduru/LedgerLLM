@@ -6,3 +6,17 @@
 {"id": "red-006", "text": "PAN ABCDE1234F belongs to the applicant.", "expected_types": ["pan"]}
 {"id": "red-007", "text": "The key sk-ant-api03-abcdefghijklmnop leaked in logs.", "expected_types": ["secret"]}
 {"id": "red-008", "text": "Server 10.0.12.7 responded slowly.", "expected_types": ["ipv4"], "must_keep": ["responded slowly"]}
+{"id": "red-009", "text": "Backup bob.smith+alerts@sub.example.co.uk notified.", "expected_types": ["email"], "must_keep": ["Backup", "notified"]}
+{"id": "red-010", "text": "Fax 020 7946 0958 today.", "expected_types": ["phone"], "must_keep": ["today"]}
+{"id": "red-011", "text": "Call +44 20 7946 0958 re order 12345.", "expected_types": ["phone"], "must_keep": ["12345"]}
+{"id": "red-012", "text": "Charge 4111-1111-1111-1111 now.", "expected_types": ["credit_card"], "must_keep": ["Charge"]}
+{"id": "red-013", "text": "Order 4111111111111112 kept, card 4111111111111111 charged.", "expected_types": ["credit_card"], "must_keep": ["4111111111111112"]}
+{"id": "red-014", "text": "Aadhaar 2345-6789-0123 verified.", "expected_types": ["aadhaar"], "must_keep": ["verified"]}
+{"id": "red-015", "text": "Serial 123456789012 kept, Aadhaar 234567890123 verified.", "expected_types": ["aadhaar"], "must_keep": ["123456789012"]}
+{"id": "red-016", "text": "PAN BNZPM2501F for KYC.", "expected_types": ["pan"], "must_keep": ["KYC"]}
+{"id": "red-017", "text": "Code abcde1234f kept, PAN ABCDE1234F redacted.", "expected_types": ["pan"], "must_keep": ["abcde1234f"]}
+{"id": "red-018", "text": "Key AIzaSyDabc123DEF456ghi789JKL0 leaked.", "expected_types": ["secret"], "must_keep": ["leaked"]}
+{"id": "red-019", "text": "Token llk_ab12cd34_XyZ-123_abcdEFGH leaked in output.", "expected_types": ["secret"], "must_keep": ["leaked"]}
+{"id": "red-020", "text": "Gateway 192.168.1.1 down.", "expected_types": ["ipv4"], "must_keep": ["Gateway"]}
+{"id": "red-021", "text": "Version 999.1.1.1 kept, host 8.8.8.8 logged.", "expected_types": ["ipv4"], "must_keep": ["999.1.1.1"]}
+{"id": "red-022", "text": "Email jane@acme.io, card 4111111111111111, host 10.0.0.1.", "expected_types": ["email", "credit_card", "ipv4"]}

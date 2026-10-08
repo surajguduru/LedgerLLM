@@ -142,3 +142,20 @@ class CreateKeyRequest(BaseModel):
 class CreateKeyResponse(BaseModel):
     key: ApiKeyOut
     api_key: str
+
+
+class UpdateTenantRequest(BaseModel):
+    plan: str | None = None
+    status: str | None = None
+    budget_override_usd: float | None = Field(None, ge=0)
+
+
+class AuditOut(BaseModel):
+    id: str
+    created_at: datetime
+    tenant_id: str | None
+    key_id: str | None
+    request_id: str | None
+    actor: str
+    event_type: str
+    details: dict | None = None
