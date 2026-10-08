@@ -250,8 +250,12 @@ is released.
 **Evidence.** `make eval-redteam` runs 50 attacks and 50 benign look-alikes (`evals/redteam/cases.jsonl`) and
 fails CI below catch ≥ 0.90 / FPR ≤ 0.05. Heuristics-only: **96 % catch, 2 % FPR, p50 0.1 ms** (the two
 misses are a role-play persona and reversed text; the false positive is a security article quoting an
-attack string). With the cascade on, the classifier resolved all 12 uncertain cases correctly for $0.0014;
-the three residual errors score outside the band, so widening it is the next tuning step.
+attack string). A **held-out set** of 20 reworded attacks (`heldout.jsonl`, written without looking at the rules) is
+the honest number: the regexes alone caught **5 %** of it. That is why, with `GUARDRAIL_LLM=on`, every
+instruction below the block line is now classified rather than only the uncertain band
+(`GUARDRAIL_LLM_INSTRUCTIONS=always`): the cascade caught **90 %** of the held-out set unseen, for about
+$0.04 per 1,000 uncached requests. The regex layer is the free pre-filter and the regression floor;
+the classifier is the detector.
 
 ## Online quality monitoring
 
@@ -322,6 +326,7 @@ arithmetic**; only output *length* is synthetic.
 | Metric cardinality | **171 series**, of which only **18** carry a `tenant` label → **6 per tenant** | — | 3 tenants, 1 model, measured with Prometheus `count()`. Extrapolates to ~27,000 series at 1,000 tenants × 3 models — `DESIGN.md` §5 limit #4. The 85 `http_*` series are mostly the cost of widening the latency histogram from 3 to 14 buckets, without which neither latency target is measurable |
 | End-to-end latency p50 / p99 (real model) | *pending* — needs a Gemini key | p50 ≤ 3 s, p99 ≤ 8 s | `latency_sample.py`, 30 paced requests at three sizes. Script verified against the mock |
 | Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 2 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` (Thrishal) |
+| Red-team **held-out** set (20 reworded attacks, never used for tuning) | heuristics **5 %** before / 65 % after generic rules; cascade with every instruction classified **90 %** (old rules) / **100 %** (new) (new) | — | `evals/redteam/heldout.jsonl`; the set is now seen, a fresh one is needed for the next honest number |
 | Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %**; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier (Thrishal) |
 | Summarization faithfulness / coverage (LLM judge, 1–5) | `summarize_v1` **4.93 / 4.07**, hit rate 0.91 · `summarize_v2` **4.97 / 4.03**, hit rate 0.95 · **0 injection leaks** either way | ≥ 4.0 / ≥ 3.5 ✅ | 30-case Groq golden set, identical judge and rubric for both versions. v2 wins on faithfulness and key-point hit rate, v1 marginally on coverage, and v2 runs longer (15/30 over 120 words vs 7/30) at $0.00178 vs $0.00157 per request (Sai) |
 

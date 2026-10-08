@@ -56,6 +56,29 @@ def api_key(client):
     return make_tenant(client)["api_key"]
 
 
+class FixedProvider:
+    """Provider stub that answers every call with the same text (e.g. a canary the source lacks)."""
+
+    name = "mock"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def complete(self, *, model, system, user, max_tokens):
+        from app.llm.base import LLMResult
+
+        return LLMResult(
+            text=self.text, model=model, input_tokens=50, output_tokens=10, latency_ms=1
+        )
+
+
+def use_provider(monkeypatch, provider):
+    """Route the pipeline's model calls to `provider` for one test."""
+    import app.api.summarize as pipeline
+
+    monkeypatch.setattr(pipeline, "get_provider", lambda: provider)
+
+
 def summarize(client, key, **overrides):
     body = {"text": SAMPLE_TEXT, "style": "bullets", "max_words": 100}
     body.update(overrides)

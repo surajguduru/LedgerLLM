@@ -34,6 +34,7 @@ import structlog
 
 from app.billing import ledger
 from app.billing.pricing import compute_cost_microusd, load_prices
+from app.compliance.redaction import redact
 from app.config import get_settings
 from app.llm import ProviderError, get_provider
 from app.models import QualitySample
@@ -153,7 +154,8 @@ def _parse(text: str) -> tuple[int | None, int | None, list]:
         return None, None, ["judge returned non-JSON"]
     clamp = lambda x: max(1, min(5, x))  # noqa: E731
     issues = data.get("issues") if isinstance(data.get("issues"), list) else []
-    return clamp(f), clamp(c), [str(i)[:200] for i in issues][:10]
+    # The judge quotes the source when it explains an issue, so this can carry PII: redact before storing.
+    return clamp(f), clamp(c), [redact(str(i)[:200]).text for i in issues][:10]
 
 
 class _JudgeJob:

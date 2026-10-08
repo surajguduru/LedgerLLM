@@ -17,6 +17,8 @@ _ZERO_WIDTH = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
 
 # "I g n o r e   a l l": three or more single letters separated by single spaces.
 _SPACED_WORD = re.compile(r"\b(?:[A-Za-z] ){2,}[A-Za-z]\b")
+# "i.g.n.o.r.e" / "i-g-n-o-r-e" / "i_g_n_o_r_e": letters joined by one punctuation character.
+_PUNCT_WORD = re.compile(r"\b(?:[A-Za-z][.\-_*]){2,}[A-Za-z]\b")
 
 # Characters that render like Latin letters but are different code points.
 _HOMOGLYPHS = str.maketrans(
@@ -75,6 +77,10 @@ def normalize(text: str) -> tuple[str, list[str]]:
     if homo != out:
         applied.append("homoglyph")
     out = homo
+    dotted = _PUNCT_WORD.sub(lambda m: re.sub(r"[.\-_*]", "", m.group(0)), out)
+    if dotted != out:
+        applied.append("punctuated_letters")
+    out = dotted
     spaced = _SPACED_WORD.sub(lambda m: m.group(0).replace(" ", ""), out)
     if spaced != out:
         applied.append("spaced_letters")

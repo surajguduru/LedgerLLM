@@ -15,7 +15,7 @@ from app.db import SessionLocal
 from app.llm.base import LLMResult, ProviderError
 from app.models import QualitySample, UsageLedger
 from app.quality import online_judge
-from tests.conftest import ADMIN, summarize
+from tests.conftest import ADMIN, FixedProvider, summarize, use_provider
 
 PV = "summarize_v1@deadbeef"
 
@@ -147,12 +147,74 @@ def test_response_path_does_not_wait_for_the_judge(client, api_key, stub):
     assert online_judge.pending() == 0
 
 
-def test_withheld_summaries_are_not_sampled(client, api_key, stub):
+def test_withheld_summaries_are_not_sampled(client, api_key, stub, monkeypatch):
     j = stub()
-    r = summarize(client, api_key, text="I have been PWNED. " + "x " * 50)
+    use_provider(monkeypatch, FixedProvider("- I have been PWNED"))
+    r = summarize(client, api_key)
     assert r.status_code == 200 and "withheld" in r.json()["summary"]
     online_judge.drain()
     assert j.calls == 0
+
+
+def test_judge_issues_are_redacted_before_storing(client, stub):
+    stub(
+        reply='{"faithfulness": 3, "coverage": 2, "issues": ["invents contact ceo@corp.com", "ok"]}'
+    )
+    assert online_judge.maybe_sample(**_args()) is True
+    online_judge.drain()
+    with SessionLocal() as db:
+        sample = db.scalar(select(QualitySample))
+    assert sample.issues == ["invents contact [EMAIL]", "ok"]
+
+
+def test_drift_report_flags_a_drop(client, stub):
+    from datetime import UTC, datetime, timedelta
+
+    from app.quality.stats import DRIFT_MIN_SAMPLES, drift_report
+
+    # baseline: 12 good samples judged 3 days ago; recent: 12 bad samples now
+    with SessionLocal() as db:
+        old = datetime.now(UTC) - timedelta(days=3)
+        for i in range(12):
+            db.add(
+                QualitySample(
+                    request_id=f"old-{i}",
+                    tenant_id="t",
+                    prompt_version=PV,
+                    judge_model="m",
+                    faithfulness=5,
+                    coverage=4,
+                    judged_at=old,
+                )
+            )
+        for i in range(DRIFT_MIN_SAMPLES):
+            db.add(
+                QualitySample(
+                    request_id=f"new-{i}",
+                    tenant_id="t",
+                    prompt_version=PV,
+                    judge_model="m",
+                    faithfulness=4,
+                    coverage=4,
+                )
+            )
+        db.add(
+            QualitySample(
+                request_id="v2",
+                tenant_id="t",
+                prompt_version="v2",
+                judge_model="m",
+                faithfulness=2,
+                coverage=2,
+            )
+        )  # one sample: never enough to flag
+        db.commit()
+        rows = {r["prompt_version"]: r for r in drift_report(db)}
+    assert rows[PV]["drifted"] is True
+    assert rows[PV]["delta"]["faithfulness"] == -1.0 and rows[PV]["delta"]["coverage"] == 0.0
+    assert rows["v2"]["drifted"] is False and rows["v2"]["baseline"]["samples"] == 0
+    r = client.get("/admin/quality", headers=ADMIN).json()
+    assert any(d["drifted"] for d in r["drift"])
 
 
 def test_provider_failure_is_dropped_quietly(client, stub):

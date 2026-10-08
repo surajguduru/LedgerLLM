@@ -14,6 +14,69 @@ from sqlalchemy.orm import Session
 from app.models import QualitySample, UsageLedger
 from app.plans import microusd_to_usd
 
+DRIFT_RECENT_HOURS = 24
+DRIFT_MIN_SAMPLES = 10
+DRIFT_DROP = 0.5  # points on the 1-5 scale
+
+
+def drift_report(db: Session, *, days: int = 7) -> list[dict]:
+    """Per prompt version: mean score in the last 24 h against the mean of the days before it.
+
+    `drifted` is set when the recent window has at least DRIFT_MIN_SAMPLES scored samples and either
+    mean dropped by DRIFT_DROP or more. With a 5 % sample rate, 10 samples is ~200 requests, enough to
+    notice a prompt or model change without paging on a single bad summary.
+    """
+    now = datetime.now(UTC)
+    recent_from = now - timedelta(hours=DRIFT_RECENT_HOURS)
+    baseline_from = now - timedelta(days=days)
+
+    def means(
+        lo: datetime, hi: datetime | None
+    ) -> dict[str, tuple[int, float | None, float | None]]:
+        q = (
+            select(
+                QualitySample.prompt_version,
+                func.count(),
+                func.avg(QualitySample.faithfulness),
+                func.avg(QualitySample.coverage),
+            )
+            .where(QualitySample.judged_at >= lo)
+            .where(QualitySample.faithfulness.is_not(None))
+            .group_by(QualitySample.prompt_version)
+        )
+        if hi is not None:
+            q = q.where(QualitySample.judged_at < hi)
+        return {
+            pv: (int(n), float(f) if f is not None else None, float(c) if c is not None else None)
+            for pv, n, f, c in db.execute(q).all()
+        }
+
+    recent = means(recent_from, None)
+    baseline = means(baseline_from, recent_from)
+    out = []
+    for pv in sorted(set(recent) | set(baseline)):
+        rn, rf, rc = recent.get(pv, (0, None, None))
+        bn, bf, bc = baseline.get(pv, (0, None, None))
+        d_f = round(rf - bf, 2) if rf is not None and bf is not None else None
+        d_c = round(rc - bc, 2) if rc is not None and bc is not None else None
+        drifted = rn >= DRIFT_MIN_SAMPLES and (
+            (d_f is not None and d_f <= -DRIFT_DROP) or (d_c is not None and d_c <= -DRIFT_DROP)
+        )
+        out.append(
+            {
+                "prompt_version": pv,
+                "recent": {"samples": rn, "faithfulness_mean": _r(rf), "coverage_mean": _r(rc)},
+                "baseline": {"samples": bn, "faithfulness_mean": _r(bf), "coverage_mean": _r(bc)},
+                "delta": {"faithfulness": d_f, "coverage": d_c},
+                "drifted": drifted,
+            }
+        )
+    return out
+
+
+def _r(x: float | None) -> float | None:
+    return round(x, 2) if x is not None else None
+
 
 def quality_report(db: Session, *, days: int = 7, recent: int = 20) -> dict:
     since = datetime.now(UTC) - timedelta(days=days)
@@ -77,6 +140,7 @@ def quality_report(db: Session, *, days: int = 7, recent: int = 20) -> dict:
             if calls
             else 0.0,
         },
+        "drift": drift_report(db, days=days),
         "recent": [
             {
                 "request_id": s.request_id,

@@ -132,6 +132,20 @@ def _run_guardrail(
     return True
 
 
+def _release_open_reservation(db: Session) -> None:
+    """Return the money a request reserved if it died before settling or releasing it.
+
+    The pipeline records its reservation on the session right after `budget.reserve` and clears it
+    at the three places that settle or release. Anything that escapes in between — a crash in a
+    guardrail, a model with no price, a database error — would otherwise hold the reservation for
+    the rest of the month (D2 promises bursts cannot overspend; it must not also mean they leak).
+    """
+    open_ = db.info.pop("open_reservation", None)
+    if open_:
+        tenant_id, period, est_microusd = open_
+        budget.release(db, tenant_id, period, est_microusd)
+
+
 def _book_guardrail(
     db: Session,
     *,
@@ -192,9 +206,23 @@ def summarize(
     # 2. idempotency replay / claim ------------------------------------------------------------
     request_hash = idempotency.hash_request(payload)
     if not idempotency_key:
-        return _pipeline(
-            payload, request_id, response, db, auth, settings, None, request_hash, bypass_cache, t0
-        )
+        try:
+            return _pipeline(
+                payload,
+                request_id,
+                response,
+                db,
+                auth,
+                settings,
+                None,
+                request_hash,
+                bypass_cache,
+                t0,
+            )
+        except BaseException:
+            db.rollback()
+            _release_open_reservation(db)
+            raise
     existing = idempotency.lookup(db, auth.tenant.id, idempotency_key)
     if existing is not None and existing.request_hash != request_hash:
         raise _fail(
@@ -242,6 +270,7 @@ def summarize(
         )
     except BaseException:
         db.rollback()
+        _release_open_reservation(db)
         idempotency.release(db, auth.tenant.id, idempotency_key)
         raise
 
@@ -495,6 +524,7 @@ def _pipeline(
                 "estimate_microusd": est_microusd,
             },
         )
+    db.info["open_reservation"] = (tenant.id, decision.period, est_microusd)
     if decision.warning:
         response.headers["X-Budget-Warning"] = (
             f"{microusd_to_usd(decision.spent_microusd + decision.reserved_microusd):.4f} of "
@@ -545,6 +575,7 @@ def _pipeline(
     if _run_guardrail(
         db, mode=mode, stage="input", verdict=verdict_in, auth=auth, request_id=request_id
     ):
+        db.info.pop("open_reservation", None)
         budget.release(db, tenant.id, decision.period, est_microusd)
         raise _fail(
             db,
@@ -579,6 +610,7 @@ def _pipeline(
     except ProviderError as exc:
         # One failed call fails the request: the whole reservation is released and nothing is
         # billed, including map calls that had already answered; the platform absorbs those (D20).
+        db.info.pop("open_reservation", None)
         budget.release(db, tenant.id, decision.period, est_microusd)
         if isinstance(exc, MapReduceFailed) and exc.completed:
             done = [s.result for s in exc.completed]
@@ -673,6 +705,7 @@ def _pipeline(
             output_tokens=r.output_tokens,
             cost_microusd=cost,
         )
+    db.info.pop("open_reservation", None)
     budget.settle(db, tenant.id, decision.period, est_microusd, actual_microusd)
 
     # 10. response, log, audit, idempotency store ----------------------------------------------

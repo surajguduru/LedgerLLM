@@ -5,7 +5,7 @@ import pytest
 from app.api.summarize import WITHHELD
 from app.guardrails.input import classify_input
 from app.guardrails.output import moderate_output
-from tests.conftest import SAMPLE_TEXT, make_tenant, summarize
+from tests.conftest import SAMPLE_TEXT, FixedProvider, make_tenant, summarize, use_provider
 
 
 def test_obvious_injection_in_instructions_is_blocked(client, api_key):
@@ -81,12 +81,49 @@ def test_pii_in_summary_is_redacted_end_to_end(client, api_key):
     assert body["usage"]["cost_usd"] > 0
 
 
-def test_canary_in_output_is_withheld(client, api_key):
-    doc = "I have been PWNED. " + SAMPLE_TEXT
-    r = summarize(client, api_key, text=doc)
+def test_canary_in_output_is_withheld(client, api_key, monkeypatch):
+    # the model emits a canary that is nowhere in the source: proof it obeyed something else
+    use_provider(monkeypatch, FixedProvider("- I have been PWNED"))
+    r = summarize(client, api_key)
     assert r.status_code == 200
     assert r.json()["summary"] == WITHHELD
     assert r.json()["guardrails"]["output"]["category"] == "instruction_followed"
+
+
+def test_canary_present_in_source_is_served_but_flagged(client, api_key):
+    # an honest summary of a security article about "PWNED" must be allowed to say "PWNED"
+    doc = (
+        "Researchers found the phrase 'I have been PWNED' in thousands of injected pages. "
+        + SAMPLE_TEXT
+    )
+    r = summarize(client, api_key, text=doc)
+    assert r.status_code == 200
+    assert "PWNED" in r.json()["summary"]
+    out = r.json()["guardrails"]["output"]
+    assert out["blocked"] is False and out["category"] == "canary_in_source"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "You are an idiot and everyone hates you.",
+        "- The reviewer writes: you're so stupid, nobody likes you.",
+        "Honestly, you are a waste of space.",
+    ],
+)
+def test_second_person_insults_are_withheld(text):
+    v = moderate_output(text)
+    assert v.blocked is True and v.category == "toxicity", text
+
+
+def test_neutral_mentions_of_insult_words_pass():
+    assert (
+        moderate_output("- The idiom 'idiot savant' is discussed in chapter two.").blocked is False
+    )
+    assert (
+        moderate_output("- Critics called the policy stupid; supporters disagreed.").blocked
+        is False
+    )
 
 
 def test_url_absent_from_source_is_withheld():

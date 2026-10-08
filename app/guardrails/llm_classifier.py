@@ -23,6 +23,7 @@ from time import perf_counter
 
 import structlog
 
+from app.compliance.redaction import redact
 from app.config import get_settings
 from app.llm import ProviderError, get_provider
 
@@ -151,7 +152,7 @@ def classify_with_llm(text: str, *, source: str) -> LLMVerdict | None:
     latency_ms = int((perf_counter() - t0) * 1000)
     parsed = _parse(res.text)
     if parsed is None:
-        log.warning("guardrail_llm_bad_json", model=model, text=res.text[:120])
+        log.warning("guardrail_llm_bad_json", model=model, text=redact(res.text[:120]).text)
         return None
     injection, category, confidence = parsed
     verdict = LLMVerdict(
