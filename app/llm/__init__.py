@@ -9,6 +9,9 @@ is wrapped in a FallbackProvider that retries a retryable failure once on the fa
 takes the same provider names; LLM_FALLBACK_API_KEY defaults to LLM_API_KEY when both providers are the same,
 and LLM_FALLBACK_TIMEOUT_S to LLM_TIMEOUT_S. `fallback_model()` tells the pipeline which model it may have to
 reserve and bill for.
+
+`build_provider(reasoning_effort=...)` is the configured primary on its own, with its own reasoning_effort: the
+summary eval uses it so its judge can reason at a different level from the summarizer on the same key.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ __all__ = [
     "LLMProvider",
     "LLMResult",
     "ProviderError",
+    "build_provider",
     "estimate_tokens",
     "fallback_model",
     "get_provider",
@@ -75,6 +79,22 @@ def fallback_model() -> str | None:
     if not s.llm_fallback_model:
         raise ValueError("LLM_FALLBACK_PROVIDER is set but LLM_FALLBACK_MODEL is empty")
     return s.llm_fallback_model
+
+
+def build_provider(*, reasoning_effort: str | None = None) -> LLMProvider:
+    """A new instance of the configured primary provider, without the fallback chain.
+
+    `reasoning_effort` None keeps LLM_REASONING_EFFORT (or the preset default); "" sends nothing; any other
+    value is sent as is. Not cached: every call returns a separate instance.
+    """
+    s = get_settings()
+    return _build(
+        s.llm_provider,
+        api_key=s.llm_api_key,
+        base_url=s.llm_base_url,
+        timeout_s=s.llm_timeout_s,
+        reasoning_effort=s.llm_reasoning_effort if reasoning_effort is None else reasoning_effort,
+    )
 
 
 @lru_cache

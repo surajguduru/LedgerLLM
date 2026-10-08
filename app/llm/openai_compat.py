@@ -12,10 +12,15 @@ it; the default per preset is the lowest value every model on that endpoint acce
 `complete()` takes an optional `response_format` (e.g. {"type": "json_object"}) that is passed through
 verbatim. It is off by default and not part of the LLMProvider protocol: callers that want JSON mode check
 `supports_response_format` first, so the mock and Anthropic providers keep the plain signature.
+
+A 429 or 5xx carries the server's `Retry-After` (seconds or an HTTP date) as `ProviderError.retry_after_s`.
+Groq sends it on every 429 with the exact wait until its token window frees up; the eval runner honours it.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from time import perf_counter
 
 import httpx
@@ -95,9 +100,17 @@ class OpenAICompatibleProvider:
         latency_ms = int((perf_counter() - t0) * 1000)
 
         if r.status_code == 429:
-            raise ProviderError(f"{self.name} rate limited", retryable=True)
+            raise ProviderError(
+                f"{self.name} rate limited",
+                retryable=True,
+                retry_after_s=parse_retry_after(r.headers.get("retry-after")),
+            )
         if r.status_code >= 500:
-            raise ProviderError(f"{self.name} error {r.status_code}", retryable=True)
+            raise ProviderError(
+                f"{self.name} error {r.status_code}",
+                retryable=True,
+                retry_after_s=parse_retry_after(r.headers.get("retry-after")),
+            )
         if r.status_code >= 400:
             detail = r.text[:200].replace("\n", " ")
             raise ProviderError(
@@ -133,6 +146,27 @@ class OpenAICompatibleProvider:
             reasoning_tokens=int(details.get("reasoning_tokens") or unreported),
             provider=self.name,
         )
+
+
+def parse_retry_after(value: str | None, *, now: datetime | None = None) -> float | None:
+    """Seconds to wait from a `Retry-After` header: delta-seconds ("7", "2.5") or an HTTP date.
+
+    Returns None for a missing or unparseable value, and never a negative wait (a date in the past is 0).
+    """
+    if not value or not value.strip():
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - (now or datetime.now(UTC))).total_seconds())
 
 
 def _unreported_output_tokens(usage: dict) -> int:

@@ -1,6 +1,7 @@
 """Provider adapter tests. OWNER: Sai. The OpenAI-compatible adapter is exercised with a fake transport."""
 
 import json
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -8,9 +9,9 @@ from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.llm import get_provider
+from app.llm import build_provider, get_provider
 from app.llm.base import ProviderError
-from app.llm.openai_compat import PRESETS, OpenAICompatibleProvider
+from app.llm.openai_compat import PRESETS, OpenAICompatibleProvider, parse_retry_after
 from app.models import AuditEvent, BudgetPeriod, UsageLedger
 from tests.conftest import summarize
 
@@ -73,6 +74,39 @@ def test_rate_limit_is_retryable():
     assert e.value.retryable is True
 
 
+def test_rate_limit_carries_the_retry_after_header():
+    p = _provider(lambda r: httpx.Response(429, headers={"retry-after": "7"}, json={}), name="groq")
+    with pytest.raises(ProviderError) as e:
+        p.complete(model="m", system="s", user="u", max_tokens=10)
+    assert e.value.retryable is True and e.value.retry_after_s == 7.0
+
+
+def test_server_error_without_retry_after_has_no_hint():
+    p = _provider(lambda r: httpx.Response(503, json={}))
+    with pytest.raises(ProviderError) as e:
+        p.complete(model="m", system="s", user="u", max_tokens=10)
+    assert e.value.retryable is True and e.value.retry_after_s is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("7", 7.0),
+        (" 2.5 ", 2.5),
+        ("0", 0.0),
+        ("-3", 0.0),
+        ("Thu, 08 Oct 2026 12:00:30 GMT", 30.0),
+        ("Thu, 08 Oct 2026 11:59:00 GMT", 0.0),  # already past: no wait
+        (None, None),
+        ("", None),
+        ("soon", None),
+    ],
+)
+def test_parse_retry_after(value, expected):
+    now = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
+    assert parse_retry_after(value, now=now) == expected
+
+
 def test_bad_request_is_not_retryable():
     p = _provider(lambda r: httpx.Response(400, json={"error": {"message": "bad model"}}))
     with pytest.raises(ProviderError) as e:
@@ -130,6 +164,33 @@ def test_get_provider_threads_reasoning_effort_setting(monkeypatch, env, expecte
         monkeypatch.undo()
         get_settings.cache_clear()
         get_provider.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("setting", "override", "expected"),
+    [
+        (None, None, None),  # groq preset: nothing
+        (None, "low", "low"),
+        ("medium", None, "medium"),  # None keeps the setting
+        ("medium", "", None),  # "" sends nothing whatever the setting
+        ("medium", "high", "high"),
+    ],
+)
+def test_build_provider_takes_its_own_reasoning_effort(monkeypatch, setting, override, expected):
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("LLM_API_KEY", "k")
+    if setting is None:
+        monkeypatch.delenv("LLM_REASONING_EFFORT", raising=False)
+    else:
+        monkeypatch.setenv("LLM_REASONING_EFFORT", setting)
+    get_settings.cache_clear()
+    try:
+        p = build_provider(reasoning_effort=override)
+        assert p.reasoning_effort == expected
+        assert build_provider(reasoning_effort=override) is not p  # never shared
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
 
 
 def test_reasoning_tokens_default_to_zero_when_not_reported():

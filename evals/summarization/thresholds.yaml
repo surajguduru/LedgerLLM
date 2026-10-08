@@ -7,7 +7,8 @@
 mock:
   max_length_ratio: 1.4           # summary words / max_words
 
-# --provider gemini (PRs touching prompts/, app/feature/, evals/summarization/): the quality gate.
+# --provider groq (or gemini) with the LLM judge: the quality gate. Locally on all 30 cases; in CI
+# (PRs touching prompts/, app/feature/, evals/summarization/) on the 8-case `--subset ci`.
 model:
   min_key_point_hit_rate: 0.5     # share of key_points whose keywords appear in the summary
   max_length_ratio: 1.4           # summary words / max_words

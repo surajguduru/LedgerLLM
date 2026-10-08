@@ -13,4 +13,8 @@ models:
   claude-haiku-4-5:       { input_usd_per_mtok: 1.00, output_usd_per_mtok: 5.00 }
   claude-sonnet-5-5:      { input_usd_per_mtok: 2.00, output_usd_per_mtok: 10.00 }
   claude-opus-5-5:        { input_usd_per_mtok: 4.00, output_usd_per_mtok: 20.00 }
-  llama-3.1-8b-instant:   { input_usd_per_mtok: 0.05, output_usd_per_mtok: 0.08 }   # Groq, fallback example (D19) # unverified: last known public price; groq.com showed no table on 8 Oct
+  llama-3.1-8b-instant:   { input_usd_per_mtok: 0.05, output_usd_per_mtok: 0.08 }   # Groq, fallback example (D19) # unverified: last known public price; on 8 Oct console.groq.com/docs/models lists it as Enterprise (contact sales) and our free key cannot call it
+  # Groq models used by the summary eval (D21). Verified 8 Oct on console.groq.com/docs/models (groq.com/pricing showed no table).
+  qwen/qwen3.8-27b:       { input_usd_per_mtok: 0.80, output_usd_per_mtok: 4.00 }   # eval summarizer
+  openai/gpt-oss-120b:    { input_usd_per_mtok: 0.15, output_usd_per_mtok: 0.60 }   # eval judge
+  openai/gpt-oss-20b:     { input_usd_per_mtok: 0.075, output_usd_per_mtok: 0.30 }
