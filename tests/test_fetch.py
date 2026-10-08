@@ -209,6 +209,33 @@ def test_redirect_without_location_is_an_error():
         fetch_url("http://example.com/a", Settings(), client=_client(routes, []))
 
 
+# --- byte cap --------------------------------------------------------------------------------
+
+
+def test_body_is_cut_at_the_byte_cap_without_reading_the_rest():
+    produced = 0
+
+    def body():
+        nonlocal produced
+        for _ in range(1000):  # 1 MB on offer
+            produced += 1
+            yield b"x" * 1000
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body(), headers={"Content-Type": "text/plain"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    page = fetch_url("http://example.com/big", Settings(fetch_max_bytes=2500), client=client)
+    assert len(page.text) == 2500
+    assert produced == 3  # stopped after the chunk that crossed the cap
+
+
+def test_error_status_is_a_fetch_error():
+    routes = {"http://example.com/a": httpx.Response(503)}
+    with pytest.raises(FetchError, match="HTTP 503"):
+        fetch_url("http://example.com/a", Settings(), client=_client(routes, []))
+
+
 # --- pipeline --------------------------------------------------------------------------------
 
 

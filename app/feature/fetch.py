@@ -20,6 +20,9 @@ Redirects are where a guard that only checks the first URL fails: a public page 
 it follows at most `MAX_REDIRECTS` hops itself, resolving each `Location` against the current URL
 and validating the result before requesting it.
 
+Bodies are streamed and reading stops at `settings.fetch_max_bytes`, so a huge (or endless)
+response costs at most that much memory and bandwidth instead of being downloaded and sliced.
+
 OWNER: Sai. Still to do: truncation strategy for long pages (head + tail, map-reduce as a stretch
 goal); content-type handling (PDF via pypdf is a stretch goal).
 """
@@ -122,23 +125,41 @@ def _validate_hop(url: str, hop: int) -> None:
         raise FetchBlocked(f"redirect target refused: {exc}") from exc
 
 
-def _get(client: httpx.Client, url: str, settings: Settings) -> httpx.Response:
-    """GET `url`, following up to MAX_REDIRECTS redirects and validating every target first."""
+def _read_capped(r: httpx.Response, max_bytes: int) -> bytes:
+    """Read the (decoded) body until `max_bytes`, then stop; the rest is never downloaded."""
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in r.iter_bytes():
+        chunks.append(chunk)
+        size += len(chunk)
+        if size >= max_bytes:
+            break
+    return b"".join(chunks)[:max_bytes]
+
+
+def _get(client: httpx.Client, url: str, settings: Settings) -> tuple[httpx.Response, bytes]:
+    """GET `url`, following up to MAX_REDIRECTS redirects and validating every target first.
+
+    Returns the final response and at most `settings.fetch_max_bytes` of its body.
+    """
     current = url
     for hop in range(MAX_REDIRECTS + 1):
         _validate_hop(current, hop)
         try:
-            r = client.get(
+            with client.stream(
+                "GET",
                 current,
                 headers=HEADERS,
                 follow_redirects=False,
                 timeout=settings.fetch_timeout_s,
-            )
+            ) as r:
+                if r.status_code >= 400:
+                    raise FetchError(f"upstream returned HTTP {r.status_code}")
+                if not 300 <= r.status_code < 400:
+                    return r, _read_capped(r, settings.fetch_max_bytes)
+                location = r.headers.get("location")
         except httpx.HTTPError as exc:
             raise FetchError(f"fetch failed: {exc.__class__.__name__}") from exc
-        if not 300 <= r.status_code < 400:
-            return r
-        location = r.headers.get("location")
         if not location:
             raise FetchError(f"upstream returned HTTP {r.status_code} without a Location header")
         current = urljoin(current, location)
@@ -150,13 +171,10 @@ def fetch_url(url: str, settings: Settings, *, client: httpx.Client | None = Non
     t0 = perf_counter()
     if client is None:
         with httpx.Client(timeout=settings.fetch_timeout_s, follow_redirects=False) as own:
-            r = _get(own, url, settings)
+            r, body = _get(own, url, settings)
     else:
-        r = _get(client, url, settings)
-    if r.status_code >= 400:
-        raise FetchError(f"upstream returned HTTP {r.status_code}")
+        r, body = _get(client, url, settings)
 
-    body = r.content[: settings.fetch_max_bytes]
     content_type = r.headers.get("content-type", "")
     encoding = r.encoding or "utf-8"
     raw = body.decode(encoding, errors="replace")
