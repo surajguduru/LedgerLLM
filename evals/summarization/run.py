@@ -288,6 +288,7 @@ def compute_means(rows: list[dict]) -> dict:
         "length_ratio_max": round(max(r["length_ratio"] for r in done), 3) if done else None,
         "leaked_cases": [r["id"] for r in done if r["leaks"]],
         "case_errors": sum("error" in r for r in rows),
+        "empty_summaries": sum(not r["summary"].strip() for r in done),
         "faithfulness": _mean([j["faithfulness"] for j in scored]),
         "coverage": _mean([j["coverage"] for j in scored]),
         "judge_errors": len(judged) - len(scored),
@@ -295,15 +296,52 @@ def compute_means(rows: list[dict]) -> dict:
     }
 
 
-def judge_gate(means: dict, th: dict) -> bool:
-    """A judge that errors on more than the allowed share fails, so a broken judge cannot pass on luck."""
-    if means["faithfulness"] is None:
-        return False
-    return (
-        means["judge_error_rate"] <= th["max_judge_error_rate"]
-        and means["faithfulness"] >= th["min_faithfulness"]
-        and means["coverage"] >= th["min_coverage"]
+def check_gate(means: dict, th: dict, *, section: str) -> list[str]:
+    """Return the failed checks (empty = pass) for one section of thresholds.yaml.
+
+    `mock` proves the pipeline runs end to end: the mock echoes the first 60 words of the document, so its
+    hit rate and leaks say nothing about quality and are only reported. `model` is the quality gate, and it
+    includes the judge error rate so a broken judge cannot pass on a handful of lucky cases.
+    """
+    fails: list[str] = []
+
+    def need(ok: bool, what: str) -> None:
+        if not ok:
+            fails.append(what)
+
+    if means["length_ratio_max"] is None:
+        return ["no case produced a summary"]
+    need(
+        means["length_ratio_max"] <= th["max_length_ratio"],
+        f"length ratio {means['length_ratio_max']} > {th['max_length_ratio']}",
     )
+    if section == "mock":
+        need(means["case_errors"] == 0, f"{means['case_errors']} case(s) raised")
+        need(means["empty_summaries"] == 0, f"{means['empty_summaries']} empty summary(ies)")
+        return fails
+    need(
+        means["key_point_hit_rate"] >= th["min_key_point_hit_rate"],
+        f"hit rate {means['key_point_hit_rate']} < {th['min_key_point_hit_rate']}",
+    )
+    need(
+        len(means["leaked_cases"]) <= th["max_leaked_cases"],
+        f"leaks in {means['leaked_cases']}",
+    )
+    if means["faithfulness"] is None:
+        return [*fails, "the judge scored no case"]
+    need(
+        means["judge_error_rate"] <= th["max_judge_error_rate"],
+        f"judge error rate {means['judge_error_rate']} > {th['max_judge_error_rate']}",
+    )
+    need(
+        means["faithfulness"] >= th["min_faithfulness"],
+        f"faithfulness {means['faithfulness']} < {th['min_faithfulness']}",
+    )
+    need(
+        means["coverage"] >= th["min_coverage"],
+        f"coverage {means['coverage']} < {th['min_coverage']}",
+    )
+    return fails
 
 
 def worst_cases(rows: list[dict], k: int = 3) -> list[dict]:
@@ -354,6 +392,8 @@ def print_report(report: dict) -> None:
         f"  key-point hit rate : {m['key_point_hit_rate'] or 0:.2f}   "
         f"length ratio max: {m['length_ratio_max'] or 0:.2f}   leaks: {m['leaked_cases']}"
     )
+    if not meta["judge_model"]:
+        print("  (mock run: hit rate and leaks are reported, not gated; see thresholds.yaml)")
     if meta["judge_model"]:
         print(
             f"  judge ({meta['judge_model']}) faithfulness: {m['faithfulness'] or 0:.2f}   "
@@ -450,23 +490,15 @@ def main() -> int:
         wall_time_s=time.monotonic() - t0,
     )
     print_report(report)
-    m = report["meta"]["means"]
-    ok = (
-        (m["key_point_hit_rate"] or 0) >= th["min_key_point_hit_rate"]
-        and (m["length_ratio_max"] or 0) <= th["max_length_ratio"]
-        and not m["leaked_cases"]
-    )
-    if use_judge:
-        ok = ok and judge_gate(m, th)
-    else:
-        ok = ok and m["case_errors"] == 0  # with the mock nothing should fail
+    section = "model" if use_judge else "mock"
+    failures = check_gate(report["meta"]["means"], th[section], section=section)
     out = args.out or HERE / "results" / f"last_{args.provider}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n")
     print(f"  wrote {out}")
     if args.gate:
-        print(f"gate: {'PASS' if ok else 'FAIL'}")
-        return 0 if ok else 1
+        print(f"gate ({section}): {'FAIL: ' + '; '.join(failures) if failures else 'PASS'}")
+        return 1 if failures else 0
     return 0
 
 
