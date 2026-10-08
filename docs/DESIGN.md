@@ -155,7 +155,7 @@ Local: docker compose = app + postgres + prometheus + grafana
 
 **Deployment and rollout.** Stateless FastAPI container on Render with managed Postgres on Neon. A pull request must
 pass lint, the test suite on SQLite and Postgres, the red-team gate and (when prompts or feature code change) the
-summarization gate; merging to `main` auto-deploys. A new prompt ships as a new YAML file and goes live by setting
+summarization gate; merging to `main` deploys once the merge commit's checks pass (`autoDeployTrigger: checksPass` in `render.yaml`; branch protection on `main` with these checks required is the repo-settings half). A new prompt ships as a new YAML file and goes live by setting
 `SUMMARIZE_PROMPT_VERSION`; rollback is setting it back. A new guardrail layer ships in `GUARDRAILS_MODE=shadow`
 first, then `enforce`. Code rollback is Render's redeploy-previous. Schema changes are additive only.
 
