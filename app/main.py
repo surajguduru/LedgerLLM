@@ -8,7 +8,7 @@ from fastapi.responses import RedirectResponse
 from app.api import admin, dashboard, feedback, health, summarize, usage
 from app.config import check_production_safety, get_settings
 from app.db import init_db
-from app.errors import install_error_handlers
+from app.errors import BodySizeLimitMiddleware, install_error_handlers
 from app.llm import get_provider
 from app.observability.logging import RequestContextMiddleware, configure_logging
 from app.observability.metrics import setup_metrics
@@ -36,6 +36,8 @@ def create_app() -> FastAPI:
         ),
         lifespan=lifespan,
     )
+    # Added first, so it runs inside the request context and its 413 carries the request id.
+    app.add_middleware(BodySizeLimitMiddleware)
     app.add_middleware(RequestContextMiddleware)
     install_error_handlers(app)
     setup_metrics(app)

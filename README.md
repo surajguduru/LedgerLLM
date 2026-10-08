@@ -95,8 +95,8 @@ make down
 
 ```
 client ─JSON/HTTPS─▶ ① auth (API key → tenant, plan)         ⑥ input guardrail (instructions, then document)
-                     ② idempotency replay                     ⑦ LLM call with the versioned prompt
-                     ③ rate limit (per key + tenant, /min)   ⑧ output moderation
+                     ② rate limit (per key + tenant, /min)   ⑦ LLM call with the versioned prompt
+                     ③ idempotency replay                     ⑧ output moderation
                      ④ fetch URL + extract text (SSRF-guarded) ⑨ settle actual cost; ledger row; metrics
                      ⑤ estimate cost → ATOMIC budget reserve  ⑩ redacted request log; audit; idempotent store
 ```
@@ -137,12 +137,14 @@ Headers on every response: `X-Request-ID`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 | `/app/api/*` | portal JSON API (session cookie): `signup`, `login`, `logout`, `me`, `keys` (create, `/{id}/revoke`, `/{id}/rotate`), `models`, `playground/summarize`, `usage?period=`, `statement.csv`, `billing`, `billing/plan` |
 | `GET /dashboard` | usage/billing page for a tenant (paste a key) |
 | `POST /admin/tenants`, `POST /admin/tenants/{id}/keys`, `GET /admin/tenants` | tenant and key management (`Authorization: Bearer $ADMIN_TOKEN`) |
-| `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus, health, OpenAPI |
+| `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus (needs `Authorization: Bearer $METRICS_TOKEN` when set; 404 outside dev/test without it), health and deployed commit, OpenAPI |
 
 Errors always look like `{"error": {"code": "…", "message": "…", "request_id": "…"}}` with stable codes:
 `401 missing_api_key | invalid_api_key` · `403 tenant_suspended | model_not_allowed` · `429 rate_limited` ·
 `402 budget_exceeded` · `400 blocked_input | fetch_blocked` · `422 fetch_failed | validation_error` ·
-`409 idempotency_conflict` · `502 upstream_error`.
+`409 idempotency_conflict | idempotency_in_progress` · `404 request_not_found` (feedback) ·
+`413 content_too_large` (body over `MAX_REQUEST_BYTES`, default 4 MB) · `404 not_found` (no such route) ·
+`405 method_not_allowed` · `502 upstream_error`.
 
 ## Tenant portal
 
@@ -299,7 +301,7 @@ because their worst case would not. Decision D23 in `docs/DESIGN.md` covers how 
   request (Postgres and SQLite). Free 5, pro 60, enterprise 600 requests/minute. A check costs p50 0.75 ms / p99 1.4 ms
   on Postgres; the accepted cost of a fixed window is up to 2× rpm across a window boundary (measured: exactly 2.0×).
 - **Idempotency** — `Idempotency-Key` is scoped per tenant and kept for 24 h. The same key with the same body replays the
-  stored response and is never billed twice; with a different body it is 409 `idempotency_conflict`; while the first
+  stored response and is never billed twice (a replay still counts against the rate limit and carries `X-RateLimit-*`); with a different body it is 409 `idempotency_conflict`; while the first
   request is still running, a duplicate gets 409 `idempotency_in_progress`. A failed request frees the key for a retry.
 - **Response cache** — exact match on tenant, model, prompt hash, options and the extracted text, checked before the budget
   reserve. A hit is free (`usage.cached: true`, `cost_usd: 0`) and is booked as a zero-cost ledger row so request counts
@@ -516,7 +518,8 @@ rules for these signals are in [`ops/alerts.yml`](ops/alerts.yml).
 `/metrics` exposes `ledgerllm_cost_microusd_total{tenant,model,purpose}`, `ledgerllm_tokens_total`,
 `ledgerllm_rejections_total{reason}`, `ledgerllm_llm_latency_seconds`, `ledgerllm_guardrail_verdicts_total`,
 `ledgerllm_feedback_total`, `ledgerllm_quality_score{prompt_version,dimension}`, plus HTTP request counts and
-latency histograms. Grafana dashboards are provisioned
+latency histograms. These are labelled by tenant id, so `/metrics` is not public: with `METRICS_TOKEN` set it needs
+that bearer token, and without one it is open only in dev/test (the docker-compose Prometheus). Grafana dashboards are provisioned
 from `ops/grafana/dashboards/`. Logs are JSON with a `request_id` on every line; the `request_logs` (redacted)
 and `audit_events` tables explain every refusal after the fact.
 
@@ -538,7 +541,9 @@ Docker image (`Dockerfile`) deployed as a Render web service via `render.yaml`, 
 (step-by-step runbook: [`docs/DEPLOY.md`](docs/DEPLOY.md)).
 Configuration is entirely environment variables: `DATABASE_URL`, `LLM_PROVIDER`, `LLM_API_KEY`,
 `ADMIN_TOKEN`, `GUARDRAILS_MODE`, `GUARDRAIL_LLM`, `QUALITY_SAMPLE_RATE`, `SUMMARIZE_PROMPT_VERSION`,
-`RESPONSE_CACHE_ENABLED`. Merges to `main` deploy automatically once CI
+`RESPONSE_CACHE_ENABLED`, `MAX_REQUEST_BYTES`, `METRICS_TOKEN`, `FORWARDED_ALLOW_IPS` (proxies whose
+`X-Forwarded-For` uvicorn trusts; `*` on Render). `GET /healthz` reports the deployed commit as `version`
+(`RENDER_GIT_COMMIT`, or `GIT_COMMIT`). Merges to `main` deploy automatically once CI
 and both eval gates pass. The app is stateless, so it scales horizontally without changes.
 
 ## Repository layout

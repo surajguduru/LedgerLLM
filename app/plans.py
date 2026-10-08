@@ -20,6 +20,16 @@ def microusd_to_usd(microusd: int) -> float:
     return round(microusd / MICRO, 6)
 
 
+def format_usd(microusd: int) -> str:
+    """Dollars for human-readable text: exact to the micro-dollar, trailing zeros trimmed to cents.
+
+    `:.2f` would show a $0.004 limit as "0.00"; this gives "0.004", and "10.00" for ten dollars.
+    """
+    whole, frac = divmod(abs(microusd), MICRO)
+    digits = f"{frac:06d}".rstrip("0").ljust(2, "0")
+    return f"{'-' if microusd < 0 else ''}{whole}.{digits}"
+
+
 @dataclass(frozen=True)
 class Plan:
     name: str
