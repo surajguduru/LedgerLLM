@@ -13,7 +13,8 @@ on Gemini a sibling model): a rubric prompt, strict JSON validation, one retry, 
 tier (requests and estimated tokens per minute) and back off on 429/5xx, for as long as the server's Retry-After
 says when it sends one. thresholds.yaml has a `mock` section (the mock cannot summarise, so it gates
 plumbing only) and a `model` section (the quality gate). Results go to results/last_<provider>.json with run
-metadata (prompt version@hash, models, reasoning efforts, tokens, wall time, means). Committed: results/last_groq.json
+metadata (prompt version@hash, models, reasoning efforts, tokens, wall time, means;
+the means include summaries over the word limit and mean summary output tokens, which a prompt change moves). Committed: results/last_groq.json
 (the 30-case run) and results/last_gemini.json (the 3-case Gemini run; Gemini's free tier allows only 20 flash
 requests a day, so a 30-case run cannot finish there).
 calibration.jsonl + agreement.py measure how far the judge agrees with hand scores.
@@ -339,6 +340,7 @@ def evaluate_case(
             "length_ratio": len(r.text.split()) / MAX_WORDS,
             "leaks": [m for m in case.get("must_not_include", []) if m.lower() in r.text.lower()],
             "tokens": r.input_tokens + r.output_tokens,
+            "output_tokens": r.output_tokens,
         }
     )
     if use_judge:
@@ -388,6 +390,10 @@ def compute_means(rows: list[dict]) -> dict:
         "leaked_cases": [r["id"] for r in done if r["leaks"]],
         "case_errors": sum("error" in r for r in rows),
         "empty_summaries": sum(not r["summary"].strip() for r in done),
+        "over_word_limit": sum(r["length_ratio"] > 1 for r in done),
+        "summary_output_tokens_mean": _mean(
+            [r["output_tokens"] for r in done if "output_tokens" in r]
+        ),
         "faithfulness": _mean([j["faithfulness"] for j in scored]),
         "coverage": _mean([j["coverage"] for j in scored]),
         "judge_errors": len(judged) - len(scored),

@@ -129,6 +129,12 @@ def _rows(scores: list[tuple[int, int] | None]) -> list[dict]:
     ]
 
 
+def test_means_count_summaries_over_the_word_limit():
+    rows = _rows([(5, 5)] * 3)
+    rows[0]["length_ratio"], rows[1]["length_ratio"] = 1.05, 1.0
+    assert run.compute_means(rows)["over_word_limit"] == 1
+
+
 def _model_gate(rows: list[dict]) -> list[str]:
     return run.check_gate(run.compute_means(rows), TH["model"], section="model")
 
@@ -455,6 +461,9 @@ def test_report_meta_separates_summary_and_judge_tokens():
     assert meta["tokens"]["judge"] == 240
     assert meta["tokens"]["total"] == meta["tokens"]["summaries"] + 240
     assert meta["means"]["faithfulness"] == 3 and meta["means"]["judge_errors"] == 0
+    # per-summary output tokens (what a prompt change moves, and what list-price cost follows)
+    assert all(r["output_tokens"] > 0 and r["output_tokens"] < r["tokens"] for r in rows)
+    assert meta["means"]["summary_output_tokens_mean"] == rows[0]["output_tokens"]
     assert meta["timestamp_utc"].endswith("Z")
     assert report["cases"] == rows
 
