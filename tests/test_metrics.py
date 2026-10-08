@@ -99,3 +99,34 @@ def test_dashboard_queries_only_metrics_we_actually_expose(client, api_key):
     text = client.get("/metrics").text
     missing = {n for n in dashboard_metric_names() - PENDING_METRICS if n not in text}
     assert not missing, f"dashboard panels query metrics that /metrics does not expose: {missing}"
+
+
+def _http_request_lines(logs: list[dict]) -> list[dict]:
+    return [e for e in logs if e.get("event") == "http_request"]
+
+
+def test_log_line_carries_tenant_and_error_code(client, api_key):
+    """A refusal must be traceable to a customer from the logs alone, without joining the ledger."""
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        assert summarize(client, api_key).status_code == 200
+    ok = _http_request_lines(logs)[-1]
+    assert ok["tenant_id"] and ok["error_code"] is None
+
+    with capture_logs() as logs:
+        assert summarize(client, api_key, model="claude-opus-5-5").status_code == 403
+    refused = _http_request_lines(logs)[-1]
+    assert refused["error_code"] == "model_not_allowed"
+    assert refused["tenant_id"] == ok["tenant_id"]  # same customer, now attributable
+
+
+def test_log_line_has_no_tenant_when_auth_fails(client):
+    """No tenant was resolved, so the field is None rather than a stale or guessed value."""
+    from structlog.testing import capture_logs
+
+    with capture_logs() as logs:
+        r = client.post("/v1/summarize", json={"text": "x"}, headers={"X-API-Key": "llk_bogus"})
+    assert r.status_code == 401
+    line = _http_request_lines(logs)[-1]
+    assert line["tenant_id"] is None and line["error_code"] == "invalid_api_key"

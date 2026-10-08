@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.auth.keys import hash_key
 from app.db import get_db
 from app.errors import ApiError
 from app.models import ApiKey, Tenant, utcnow
+from app.observability.logging import note_tenant
 from app.plans import Plan, get_plan
 
 
@@ -31,6 +32,7 @@ def _extract_raw_key(x_api_key: str | None, authorization: str | None) -> str | 
 
 
 def get_auth_context(
+    request: Request,
     db: Session = Depends(get_db),
     x_api_key: str | None = Header(None, alias="X-API-Key"),
     authorization: str | None = Header(None),
@@ -48,4 +50,7 @@ def get_auth_context(
         raise ApiError(403, "tenant_suspended", "tenant is not active")
     # TODO(Loukik): this write-per-request is fine at our scale; batch or sample it at 10x.
     key.last_used_at = utcnow()
+    # Puts tenant_id on the http_request log line, so a refusal is traceable to a customer
+    # from the logs alone (see app/observability/logging.py).
+    note_tenant(request, tenant.id)
     return AuthContext(tenant=tenant, api_key=key, plan=get_plan(tenant.plan))
