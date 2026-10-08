@@ -5,9 +5,14 @@ concurrent requests must not all pass a check against a stale 'spent' value. So 
 atomically reserves its worst-case cost up front (one UPDATE ... WHERE spent+reserved+est <= limit),
 and after the call we settle the actual cost and release the reservation.
 
-OWNER: Naresh. Base ships a working atomic reserve/settle. Naresh owns: concurrency tests
-(tests/test_budget.py), soft-warning audit event exactly once per period, period rollover,
-usage summary + dashboard (app/api/usage.py, app/api/dashboard.py), and the cost-per-request numbers.
+Soft warning: once committed spend (spent + reserved) reaches soft_warning_fraction of the limit,
+every response carries X-Budget-Warning, and exactly one request per period wins a conditional
+UPDATE on soft_warned_at (`first_warning`) so the caller writes one budget.soft_warning audit event.
+
+Rollover: a new UTC month gets a fresh row on its first request. The row's hard limit follows the
+tenant's plan or override on every request, so a mid-month change applies to the next request.
+
+OWNER: Naresh.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ class BudgetDecision:
     spent_microusd: int
     reserved_microusd: int
     warning: bool
+    first_warning: bool = False  # this request crossed the soft threshold first in the period
 
     @property
     def remaining_microusd(self) -> int:
@@ -88,6 +94,12 @@ def reserve(db: Session, tenant: Tenant, plan: Plan, est_microusd: int) -> Budge
     db.refresh(bp)
     committed = bp.spent_microusd + bp.reserved_microusd
     warning = committed >= load_plans().soft_warning_fraction * bp.hard_limit_microusd
+    first_warning = (
+        allowed
+        and warning
+        and bp.soft_warned_at is None
+        and _claim_soft_warning(db, tenant.id, period)
+    )
     return BudgetDecision(
         allowed=allowed,
         period=period,
@@ -95,7 +107,26 @@ def reserve(db: Session, tenant: Tenant, plan: Plan, est_microusd: int) -> Budge
         spent_microusd=bp.spent_microusd,
         reserved_microusd=bp.reserved_microusd,
         warning=warning,
+        first_warning=first_warning,
     )
+
+
+def _claim_soft_warning(db: Session, tenant_id: str, period: str) -> bool:
+    """Concurrent requests may all see soft_warned_at IS NULL; only one UPDATE matches the row."""
+    claimed = (
+        db.execute(
+            update(BudgetPeriod)
+            .where(
+                BudgetPeriod.tenant_id == tenant_id,
+                BudgetPeriod.period == period,
+                BudgetPeriod.soft_warned_at.is_(None),
+            )
+            .values(soft_warned_at=utcnow())
+        ).rowcount
+        == 1
+    )
+    db.commit()
+    return claimed
 
 
 def _release_expr(est_microusd: int):
