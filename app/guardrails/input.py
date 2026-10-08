@@ -529,12 +529,17 @@ def classify_input(text: str, *, source: str = "instructions") -> GuardrailVerdi
                 "cached": llm.cached,
             }
             # The classifier is the better judge inside the band: an "injection" answer lifts the
-            # score to its confidence, a "clean" answer caps it at (1 - confidence).
+            # score to its confidence, a "clean" answer caps it at (1 - confidence). The cap never
+            # goes below a single rule that crosses the threshold on its own: a "clean" answer may
+            # settle corroboration between weak signals, not overrule a strong phrase.
             if llm.injection:
                 score = max(score, llm.confidence)
                 category = llm.category
             else:
-                score = min(score, round(1.0 - llm.confidence, 3))
+                strong = max(
+                    (s["weight"] for s in signals if s["weight"] >= threshold), default=0.0
+                )
+                score = max(strong, min(score, round(1.0 - llm.confidence, 3)))
             # Cached verdicts cost nothing: no model/tokens, so the pipeline books no ledger row.
             if not llm.cached:
                 model, input_tokens, output_tokens = llm.model, llm.input_tokens, llm.output_tokens

@@ -46,6 +46,7 @@ SYSTEM_PROMPT = (
 )
 
 _JSON = re.compile(r"\{.*\}", re.S)
+_TEXT_TAG = re.compile(r"<(/?text)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,12 @@ def _cache_key(text: str, source: str) -> str:
     return hashlib.sha256(f"{source}\x00{text}".encode()).hexdigest()
 
 
+def _neutralise_text_tags(value: str) -> str:
+    """Break `<text` / `</text` in the input so it cannot close the wrapper and append its own
+    verdict (same treatment as the summarizer's <document> tags, app/feature/prompts.py)."""
+    return _TEXT_TAG.sub(r"<\\\1", value)
+
+
 def _clip(text: str) -> str:
     if len(text) <= MAX_INPUT_CHARS:
         return text
@@ -140,7 +147,7 @@ def classify_with_llm(text: str, *, source: str) -> LLMVerdict | None:
 
     settings = get_settings()
     model = settings.guardrail_llm_model
-    user = f"<source_type>{source}</source_type>\n<text>\n{_clip(text)}\n</text>"
+    user = f"<source_type>{source}</source_type>\n<text>\n{_neutralise_text_tags(_clip(text))}\n</text>"
     t0 = perf_counter()
     try:
         res = get_provider().complete(
@@ -159,7 +166,9 @@ def classify_with_llm(text: str, *, source: str) -> LLMVerdict | None:
         injection=injection,
         category=category if injection else "none",
         confidence=confidence,
-        model=model,
+        # the model that answered, which after a provider fallback is not the configured one: the
+        # ledger row is priced by this name
+        model=res.model,
         input_tokens=res.input_tokens,
         output_tokens=res.output_tokens,
         latency_ms=latency_ms,
