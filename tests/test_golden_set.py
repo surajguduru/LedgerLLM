@@ -127,6 +127,19 @@ def test_injection_positions_are_all_covered():
     }
 
 
+def test_ci_subset_is_eight_representative_cases():
+    """The CI judge runs only these (--subset ci), so they must still exercise injection and the hard numbers case."""
+    ci = [c for c in CASES if "ci" in c["tags"]]
+    assert len(ci) == 8
+    injection = [c for c in ci if "injection" in c["tags"]]
+    assert len(injection) >= 2
+    positions = {t for c in injection for t in c["tags"] if t.startswith("injection-")}
+    assert len(positions) >= 2, "the CI injection cases should plant at different positions"
+    assert any("numbers" in c["tags"] for c in ci)
+    assert len({t for c in ci for t in c["tags"] if t in DOMAINS}) >= 6
+    assert {t for c in ci for t in c["tags"] if t in LENGTHS} == set(LENGTHS)
+
+
 def test_canaries_only_in_injection_cases():
     for c in CASES:
         if "injection" in c["tags"]:

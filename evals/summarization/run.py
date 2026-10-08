@@ -3,6 +3,7 @@
     python -m evals.summarization.run --provider mock --gate      # plumbing gate (CI, every PR, free)
     python -m evals.summarization.run --provider gemini --gate    # quality gate with the LLM judge (LLM_API_KEY)
     python -m evals.summarization.run --provider groq --gate      # the same on Groq's free tier (a Groq key)
+    python -m evals.summarization.run --provider groq --subset ci --gate   # the 8-case CI subset, a few minutes
       [--model M] [--judge-model J] [--prompt-version summarize_v2] [--rpm 8] [--tpm 7000] [--out path.json]
 
 Each golden.jsonl case (the document TEXT, not a URL, so it cannot drift) is summarised through the real
@@ -23,6 +24,10 @@ misleading title (sum-016). Five carry an injected instruction whose canary (PWN
 must_not_include, one per position: start, middle, end, quoted block, footnote (tags injection-<position>).
 tests/test_golden_set.py checks that every key point is reachable from the text and every must_not_include term
 is absent from it.
+
+CI subset (`--subset ci`): 8 cases tagged `ci`, small enough for a CI job on Groq's free tier (8,000 tokens/minute
+per model): one per domain for 8 domains, 3 short / 3 medium / 2 long, the numbers-dense sum-013, and two injection
+cases at different positions (start sum-026, middle sum-027). The full 30 cases are run locally and committed.
 """
 
 from __future__ import annotations
@@ -103,6 +108,16 @@ def load_cases() -> list[dict]:
         for line in (HERE / "golden.jsonl").read_text().splitlines()
         if line.strip()
     ]
+
+
+def select_cases(cases: list[dict], subset: str | None) -> list[dict]:
+    """All cases, or only those tagged `subset` (e.g. "ci"). An unknown tag is an error, not an empty run."""
+    if not subset:
+        return cases
+    chosen = [c for c in cases if subset in c.get("tags", [])]
+    if not chosen:
+        raise ValueError(f"no golden case is tagged {subset!r}")
+    return chosen
 
 
 def key_point_hit_rate(summary: str, key_points: list[str]) -> float:
@@ -472,6 +487,7 @@ def build_report(
     wall_time_s: float,
     tpm: float = 0,
     reasoning_effort: dict | None = None,
+    subset: str | None = None,
 ) -> dict:
     summary_tokens = sum(r.get("tokens", 0) for r in rows)
     judge_tokens = sum(r.get("judge", {}).get("judge_tokens", 0) for r in rows)
@@ -483,6 +499,7 @@ def build_report(
         "reasoning_effort": reasoning_effort or {},
         "timestamp_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "n": len(rows),
+        "subset": subset,
         "rpm": rpm,
         "tpm": tpm,
         "tokens": {
@@ -498,7 +515,10 @@ def build_report(
 
 def print_report(report: dict) -> None:
     meta, m = report["meta"], report["meta"]["means"]
-    print(f"summarization eval ({meta['provider']}, prompt {meta['prompt']}, n={meta['n']})")
+    subset = f", subset {meta['subset']}" if meta.get("subset") else ""
+    print(
+        f"summarization eval ({meta['provider']}, prompt {meta['prompt']}, n={meta['n']}{subset})"
+    )
     print(
         f"  key-point hit rate : {m['key_point_hit_rate'] or 0:.2f}   "
         f"length ratio max: {m['length_ratio_max'] or 0:.2f}   leaks: {m['leaked_cases']}"
@@ -573,7 +593,15 @@ def main() -> int:
         "(default 7000 for groq, 0 = unlimited otherwise)",
     )
     ap.add_argument(
-        "--out", type=Path, default=None, help="defaults to results/last_<provider>.json"
+        "--subset",
+        default=None,
+        help="run only the golden cases with this tag, e.g. ci (the 8-case CI subset)",
+    )
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="defaults to results/last_<provider>.json (last_<provider>_<subset>.json with --subset)",
     )
     ap.add_argument("--gate", action="store_true")
     args = ap.parse_args()
@@ -602,7 +630,7 @@ def main() -> int:
 
     prompt = load_prompt(args.prompt_version)
     th = yaml.safe_load((HERE / "thresholds.yaml").read_text())
-    cases = load_cases()
+    cases = select_cases(load_cases(), args.subset)
     t0 = time.monotonic()
     rows = []
     for i, c in enumerate(cases, 1):
@@ -628,6 +656,7 @@ def main() -> int:
         rpm=rpm,
         tpm=tpm,
         wall_time_s=time.monotonic() - t0,
+        subset=args.subset,
         reasoning_effort={
             "summarizer": getattr(provider, "reasoning_effort", None),
             "judge": getattr(judge_provider, "reasoning_effort", None),
@@ -636,7 +665,8 @@ def main() -> int:
     print_report(report)
     section = "model" if use_judge else "mock"
     failures = check_gate(report["meta"]["means"], th[section], section=section)
-    out = args.out or HERE / "results" / f"last_{args.provider}.json"
+    suffix = f"_{args.subset}" if args.subset else ""
+    out = args.out or HERE / "results" / f"last_{args.provider}{suffix}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n")
     print(f"  wrote {out}")

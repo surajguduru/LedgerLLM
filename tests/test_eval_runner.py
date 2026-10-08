@@ -441,6 +441,22 @@ def test_report_meta_separates_summary_and_judge_tokens():
     assert report["cases"] == rows
 
 
+def test_select_cases_filters_by_tag():
+    cases = [
+        {"id": "a", "tags": ["news", "ci"]},
+        {"id": "b", "tags": ["news"]},
+        {"id": "c", "tags": ["ci"]},
+    ]
+    assert run.select_cases(cases, None) == cases
+    assert [c["id"] for c in run.select_cases(cases, "ci")] == ["a", "c"]
+    with pytest.raises(ValueError, match="no golden case is tagged 'nightly'"):
+        run.select_cases(cases, "nightly")
+
+
+def test_ci_subset_of_the_real_golden_set_has_eight_cases():
+    assert len(run.select_cases(run.load_cases(), "ci")) == 8
+
+
 def test_worst_cases_sorts_by_faithfulness_and_skips_errors():
     rows = [
         {"id": "a", "judge": {"faithfulness": 5, "coverage": 5, "issues": []}},
