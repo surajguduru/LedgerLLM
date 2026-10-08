@@ -304,14 +304,15 @@ arithmetic**; only output *length* is synthetic.
 | End-to-end latency p50 / p99 (real model) | *pending* — needs a Gemini key | p50 ≤ 3 s, p99 ≤ 8 s | `latency_sample.py`, 30 paced requests at three sizes. Script verified against the mock |
 | Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 2 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` (Thrishal) |
 | Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %**; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier (Thrishal) |
-| Summarization faithfulness / coverage (LLM judge, 1–5) | *not a quality number yet* — the 8 Oct Gemini run scored **1 of 3** cases (faithfulness 5, coverage 5, key-point hit rate 1.00) and **failed its gate by design**: judge error rate 0.67 > 0.10 after free-tier 503/429s exhausted the back-off | ≥ 4.0 / ≥ 3.5 | `make eval-summ PROVIDER=gemini` → `evals/summarization/results/last_gemini.json`. A run that could not score its cases must not pass — rerun when the quota resets (Sai) |
+| Summarization faithfulness / coverage (LLM judge, 1–5) | `summarize_v1` **4.93 / 4.07**, hit rate 0.91 · `summarize_v2` **4.97 / 4.03**, hit rate 0.95 · **0 injection leaks** either way | ≥ 4.0 / ≥ 3.5 ✅ | 30-case Groq golden set, identical judge and rubric for both versions. v2 wins on faithfulness and key-point hit rate, v1 marginally on coverage, and v2 runs longer (15/30 over 120 words vs 7/30) at $0.00178 vs $0.00157 per request (Sai) |
 
 Traffic-control micro-benchmarks (Suraj): rate-limit check p50 747 µs / p99 1,404 µs on Postgres;
 fixed-window edge burst measured at exactly the 2.0× rpm bound D3 accepts; image 460 MB; local cold
 start 1.1 s.
 
-**Not yet measured:** the burst against the deployment (pending a live URL) and anything needing a
-real provider key. Alert rules for these signals are in [`ops/alerts.yml`](ops/alerts.yml).
+**Not yet measured:** the burst against the deployment (pending a live URL) and our own end-to-end
+latency against a real model (needs `LLM_API_KEY`; the script is verified against the mock). Alert
+rules for these signals are in [`ops/alerts.yml`](ops/alerts.yml).
 
 ## Observability
 

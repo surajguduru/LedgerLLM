@@ -160,13 +160,20 @@ exists for.
 
 **Why 800 ms matters.** That is the hostile case, not a slow one. The naive alternative —
 `check spent < limit`, *then* call the model — leaves a window the width of the model call during
-which every concurrent request reads the same stale `spent` and all of them pass. At 800 ms, with 50
-in flight, up to 50 requests are admitted where ~1 fits. At ~$0.000695 each that is ~$0.035 of
-overspend against a $0.020 limit — **~2.7× the entire budget blown in a single wave**, and it repeats
-every wave until a settle finally lands. The atomic reserve closes the window because admission and
-accounting are the *same* statement: there is no gap between deciding and recording.
+which every concurrent request reads the same stale `spent` and all of them pass. The wider the
+window, the more requests slip through it.
 
-Measured overspend: **$0.000000**. Spend stopped at $0.018765 of $0.020000.
+This is no longer a thought experiment: Naresh **implemented the rejected design and measured it**
+(README, "Cost attribution & budgets"). On a $0.004 budget with 50 concurrent requests, check-then-call
+admitted 10 and spent **164 % of the limit**; the atomic reserve admitted 4 and spent 66 %, with the
+ledger total equal to spend and nothing left reserved. That is the counterfactual, measured rather
+than argued, and it is the strongest single number in the project.
+
+Our run here is the same property at a wider window and a larger key count.
+**Measured overspend: $0.000000** — spend stopped at $0.018765 of $0.020000.
+
+The reserve closes the window because admission and accounting are the *same* statement: there is no
+gap between deciding and recording.
 
 **`reserved == 0` is the half people forget.** "spent ≤ limit" alone could be satisfied by a system
 that reserved budget and never released it — it would look compliant while slowly eating money
