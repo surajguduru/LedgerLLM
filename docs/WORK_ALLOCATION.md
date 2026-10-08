@@ -29,7 +29,7 @@ Shared files (`app/schemas.py`, `app/models.py`, `app/errors.py`, `app/api/summa
 - README section "Rate limits, idempotency, cache" with the live URL. Slide 5 (traffic control, cache, CI → deploy → rollback).
 - Optional: tokens-per-minute limit; semantic cache.
 
-## Sai — feature, model providers, quality evaluation (`app/feature/`, `app/llm/`, `prompts/`, `evals/summarization/`)
+## Sai Venkatesh Alampally — feature, model providers, quality evaluation (`app/feature/`, `app/llm/`, `prompts/`, `evals/summarization/`)
 - SSRF guard: scheme allow-list, resolve and reject private/loopback/link-local/metadata/IPv6-ULA addresses, redirect re-validation, `FetchBlocked → 400 fetch_blocked`. Makes `tests/test_fetch.py` green plus unit tests per address class.
 - Long documents: head 70 % + tail 30 % truncation with a marker; map-reduce summarization for pro/enterprise when the text exceeds the plan limit, every call booked to the ledger.
 - Model providers: `FallbackProvider` (primary Gemini → secondary such as Groq on 429/5xx/timeout) with `LLM_FALLBACK_*` config, provider recorded on the result, fallback metric; list price of any new model added to `config/prices.yaml`. Tests with `httpx.MockTransport` in `tests/test_fallback.py`.

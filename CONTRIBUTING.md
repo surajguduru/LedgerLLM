@@ -10,7 +10,7 @@ The full list of work per owner is in [`docs/WORK_ALLOCATION.md`](docs/WORK_ALLO
 | Traffic control (rate limits, idempotency, response cache), deployment, CI | `app/traffic/`, `Dockerfile`, `render.yaml`, `docker-compose.yml`, `.github/` | Suraj |
 | Identity, admin, compliance | `app/auth/`, `app/api/admin.py`, `app/compliance/`, `evals/redaction/` | Loukik |
 | Billing correctness and usage API | `app/billing/`, `app/api/usage.py` | Naresh |
-| Feature, model providers, quality evaluation | `app/feature/`, `app/llm/`, `prompts/`, `evals/summarization/` | Sai |
+| Feature, model providers, quality evaluation | `app/feature/`, `app/llm/`, `prompts/`, `evals/summarization/` | Sai Venkatesh Alampally |
 | Guardrails, red-team evaluation, online quality sampling | `app/guardrails/`, `app/quality/`, `evals/redteam/` | Thrishal |
 | Dashboards, metrics, load testing | `app/observability/`, `app/api/dashboard.py`, `app/api/feedback.py`, `ops/`, `loadtest/` | Yashraj |
 | Shared contracts | `app/schemas.py`, `app/models.py`, `app/errors.py`, `app/api/summarize.py` | everyone, reviewed by the owner of the affected stage |

@@ -1,4 +1,4 @@
-# Brief 03 — The feature, the model providers, and the quality eval — **Sai**
+# Brief 03 — The feature, the model providers, and the quality eval — **Sai Venkatesh Alampally**
 
 ## Mission
 You own what the customer buys (the summary), how it reaches a model (**`app/llm/` — providers and a fallback chain**), and the
