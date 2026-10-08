@@ -12,7 +12,7 @@ CASES = [
     for line in Path("evals/redaction/cases.jsonl").read_text().splitlines()
     if line.strip()
 ]
-IMPLEMENTED = {"email", "phone"}
+IMPLEMENTED = {"email", "phone", "credit_card", "aadhaar", "pan", "secret", "ipv4"}
 
 
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])

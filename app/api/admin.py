@@ -17,16 +17,18 @@ from app.compliance.audit import audit
 from app.config import get_settings
 from app.db import get_db
 from app.errors import ApiError
-from app.models import ApiKey, Tenant
+from app.models import ApiKey, AuditEvent, Tenant, utcnow
 from app.plans import load_plans, microusd_to_usd, usd_to_microusd
 from app.quality.stats import quality_report
 from app.schemas import (
     ApiKeyOut,
+    AuditOut,
     CreateKeyRequest,
     CreateKeyResponse,
     CreateTenantRequest,
     CreateTenantResponse,
     TenantOut,
+    UpdateTenantRequest,
 )
 
 
@@ -137,3 +139,140 @@ def create_key(
     )
     db.commit()
     return CreateKeyResponse(key=_key_out(key), api_key=raw)
+
+
+def _audit_out(e: AuditEvent) -> AuditOut:
+    return AuditOut(
+        id=e.id,
+        created_at=e.created_at,
+        tenant_id=e.tenant_id,
+        key_id=e.key_id,
+        request_id=e.request_id,
+        actor=e.actor,
+        event_type=e.event_type,
+        details=e.details,
+    )
+
+
+@router.get("/tenants/{tenant_id}/keys", response_model=list[ApiKeyOut])
+def list_keys(tenant_id: str, db: Session = Depends(get_db)) -> list[ApiKeyOut]:
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise ApiError(404, "tenant_not_found", "no such tenant")
+    rows = db.scalars(
+        select(ApiKey).where(ApiKey.tenant_id == tenant_id).order_by(ApiKey.created_at)
+    ).all()
+    return [_key_out(k) for k in rows]
+
+
+@router.delete("/keys/{key_id}", response_model=ApiKeyOut)
+def revoke_key(key_id: str, db: Session = Depends(get_db)) -> ApiKeyOut:
+    key = db.get(ApiKey, key_id)
+    if key is None:
+        raise ApiError(404, "key_not_found", "no such key")
+    if key.revoked_at is None:
+        key.revoked_at = utcnow()
+        audit(
+            db,
+            audit_events.KEY_REVOKED,
+            tenant_id=key.tenant_id,
+            key_id=key.id,
+            actor="admin",
+            details={"prefix": key.key_prefix},
+        )
+        db.commit()
+    return _key_out(key)
+
+
+@router.post("/keys/{key_id}/rotate", response_model=CreateKeyResponse, status_code=201)
+def rotate_key(key_id: str, db: Session = Depends(get_db)) -> CreateKeyResponse:
+    old = db.get(ApiKey, key_id)
+    if old is None:
+        raise ApiError(404, "key_not_found", "no such key")
+    if old.revoked_at is None:
+        old.revoked_at = utcnow()
+    raw, prefix, digest = generate_key()
+    new = ApiKey(tenant_id=old.tenant_id, name=old.name, key_prefix=prefix, key_hash=digest)
+    db.add(new)
+    db.flush()
+    audit(
+        db,
+        audit_events.KEY_ROTATED,
+        tenant_id=old.tenant_id,
+        key_id=new.id,
+        actor="admin",
+        details={"prefix": prefix, "rotated_from": old.id},
+    )
+    audit(
+        db,
+        audit_events.KEY_CREATED,
+        tenant_id=old.tenant_id,
+        key_id=new.id,
+        actor="admin",
+        details={"prefix": prefix},
+    )
+    db.commit()
+    return CreateKeyResponse(key=_key_out(new), api_key=raw)
+
+
+@router.patch("/tenants/{tenant_id}", response_model=TenantOut)
+def update_tenant(
+    tenant_id: str, payload: UpdateTenantRequest, db: Session = Depends(get_db)
+) -> TenantOut:
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise ApiError(404, "tenant_not_found", "no such tenant")
+    before = {
+        "plan": tenant.plan,
+        "status": tenant.status,
+        "budget_override_microusd": tenant.budget_override_microusd,
+    }
+    if payload.plan is not None:
+        if payload.plan not in load_plans().plans:
+            raise ApiError(422, "validation_error", f"unknown plan '{payload.plan}'")
+        tenant.plan = payload.plan
+    if payload.status is not None:
+        if payload.status not in ("active", "suspended"):
+            raise ApiError(422, "validation_error", "status must be active|suspended")
+        tenant.status = payload.status
+    if payload.budget_override_usd is not None:
+        tenant.budget_override_microusd = usd_to_microusd(payload.budget_override_usd)
+    after = {
+        "plan": tenant.plan,
+        "status": tenant.status,
+        "budget_override_microusd": tenant.budget_override_microusd,
+    }
+    audit(
+        db,
+        audit_events.TENANT_UPDATED,
+        tenant_id=tenant.id,
+        actor="admin",
+        details={"before": before, "after": after},
+    )
+    db.commit()
+    return _tenant_out(tenant)
+
+
+@router.get("/audit", response_model=list[AuditOut])
+def list_audit(
+    tenant_id: str | None = None,
+    event_type: str | None = None,
+    limit: int = 50,
+    before: str | None = None,
+    db: Session = Depends(get_db),
+) -> list[AuditOut]:
+    """Newest-first audit trail — the demo of "why was I refused"."""
+    limit = max(1, min(limit, 200))
+    stmt = select(AuditEvent).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+    if tenant_id:
+        stmt = stmt.where(AuditEvent.tenant_id == tenant_id)
+    if event_type:
+        stmt = stmt.where(AuditEvent.event_type == event_type)
+    if before:
+        anchor = db.get(AuditEvent, before)
+        if anchor is not None:
+            stmt = stmt.where(
+                (AuditEvent.created_at < anchor.created_at)
+                | ((AuditEvent.created_at == anchor.created_at) & (AuditEvent.id < anchor.id))
+            )
+    return [_audit_out(e) for e in db.scalars(stmt.limit(limit)).all()]
