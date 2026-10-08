@@ -31,6 +31,7 @@ from app.config import Settings, get_settings
 from app.db import get_db
 from app.errors import ApiError
 from app.feature.fetch import FetchBlocked, FetchedPage, FetchError, fetch_url
+from app.feature.longdoc import truncate_head_tail
 from app.feature.prompts import load_prompt
 from app.feature.summarize import build_user_prompt, output_token_cap, run_summary
 from app.guardrails.input import classify_input
@@ -321,9 +322,8 @@ def _pipeline(
             content_type="text/plain",
             fetched_ms=0,
         )
-    truncated = len(page.text) > plan.max_input_chars
-    if truncated:
-        page.text = page.text[: plan.max_input_chars]
+    page.text, omitted = truncate_head_tail(page.text, plan.max_input_chars)
+    truncated = omitted > 0
 
     # 4½. response cache (owner: Suraj) — a hit costs nothing and skips the budget entirely (D16)
     prompt = load_prompt(settings.summarize_prompt_version)
