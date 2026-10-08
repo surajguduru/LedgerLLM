@@ -26,6 +26,7 @@ Format: **what** · value · conditions · command · date · who.
 - Summarization LLM judge, 3-case golden set, prompt `summarize_v1@ec6822c047b1`, summarizer gemini-3.8-flash (`reasoning_effort=low`), judge gemini-3.5-flash-lite, 8 rpm per model, free tier: **1 of 3 cases completed** — summarizer 503 ("high demand") then 429 after the full 15/30/60 s back-off on sum-001 and sum-003. On sum-002: faithfulness 5, coverage 5, key-point hit rate 1.00, 917 tokens (summary 407 incl. reasoning, judge 510); judge errors 2/3 (both "no summary to judge"; the judge itself returned valid JSON first time); wall time 406 s; gate FAIL (judge error rate 0.67 > 0.10), as designed: a run that could not score its cases must not pass. Not a quality number yet — rerun when the quota resets · `python -m evals.summarization.run --provider gemini --gate` → `evals/summarization/results/last_gemini.json` (13 calls) · 8 Oct · Sai Venkatesh.
 - Same eval minutes earlier, before the `reasoning_effort=low` fix was merged (summaries cut off at ~12 words by hidden reasoning; tokens then excluded reasoning): faithfulness 4.67, coverage 2.33, hit rate 0.08, judge errors 0/3, 2,223 tokens (summaries 956, judge 1,267) ≈ 741 per case, wall time 113 s, gate FAIL (hit rate, coverage). The judge flagged the truncation itself ("the summary is cut off mid-sentence"). Three of these summaries are in `calibration.jsonl` as low-coverage rows · same command (9 calls, three of them 503s) · 8 Oct · Sai Venkatesh.
 - Judge vs human agreement: pending — 4 rows in `evals/summarization/calibration.jsonl` await blind human scores · `python -m evals.summarization.agreement` · 8 Oct · Sai Venkatesh.
+- `validate_url` overhead per call, resolver patched (DNS excluded): median 6.5 µs, p99 7.2 µs over 1,000 calls (three runs: 6.4 / 6.5 / 6.5 µs), Python 3.14, Apple M5 laptop. A real lookup adds whatever the resolver takes; the guard itself is negligible next to the fetch · throwaway `perf_counter_ns` loop over `validate_url("https://example.com/articles/ledger?x=1")` with `socket.getaddrinfo` returning one public address · 8 Oct · Sai Venkatesh.
 
 ## Trade-offs ("we chose X over Y because Z")
 - Postgres-only over Redis for counters/budgets — one atomic UPDATE suffices under 100 rps; one fewer service.
@@ -33,6 +34,7 @@ Format: **what** · value · conditions · command · date · who.
 - Integer micro-USD over float — exact sums, atomic increments.
 - Fixed window over token bucket or sliding log — one upsert per request and no per-request history; cost: up to 2× rpm across a boundary (measured above).
 - Free cache hits booked as zero-cost ledger rows over billing hits — the tenant gets an honest request count and pays only for model work (D16).
+- In-process SSRF validation of every resolved address and redirect hop over an egress proxy — no extra service on the free tier; cost: a DNS-rebinding window between check and connect (D18).
 
 ## Failure modes (and the handling)
 - Provider failure → 502, reservation released, nothing billed, audit event (`test_upstream_failure_releases_reservation_and_audits`).
@@ -41,3 +43,4 @@ Format: **what** · value · conditions · command · date · who.
 - Two identical cache misses at once → the cache write is an upsert, so neither request fails (`cache.store`).
 - Eval judge replies with bad JSON or out-of-range scores → one retry, then `judge_error`, excluded from the means; > 10 % judge errors fails the gate (`tests/test_eval_runner.py`).
 - Free-tier 503/429 during the eval → per-model pacing, 15/30/60 s back-off, then that case alone is given up and counted as a judge error (`results/last_gemini.json`, 8 Oct).
+- URL pointing at an internal address, directly or through a redirect → 400 `fetch_blocked` before any request to it is sent, logged, nothing billed; DNS rebinding between check and connect is the accepted gap (D18, `tests/test_fetch.py`).

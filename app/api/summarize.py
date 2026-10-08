@@ -30,7 +30,7 @@ from app.compliance.request_log import write_request_log
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.errors import ApiError
-from app.feature.fetch import FetchedPage, FetchError, fetch_url
+from app.feature.fetch import FetchBlocked, FetchedPage, FetchError, fetch_url
 from app.feature.prompts import load_prompt
 from app.feature.summarize import build_user_prompt, output_token_cap, run_summary
 from app.guardrails.input import classify_input
@@ -287,6 +287,19 @@ def _pipeline(
     if payload.url:
         try:
             page = fetch_url(str(payload.url), settings)
+        except FetchBlocked as exc:
+            # SSRF guard refusal. TODO(Loukik): a fetch.blocked audit event in app/compliance/audit.py
+            raise _fail(
+                db,
+                status=400,
+                code="fetch_blocked",
+                message=str(exc),
+                request_id=request_id,
+                auth=auth,
+                latency_ms=elapsed(),
+                audit_type=None,
+                raw_input=raw_for_log,
+            ) from exc
         except FetchError as exc:
             raise _fail(
                 db,
