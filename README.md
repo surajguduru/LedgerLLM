@@ -282,20 +282,36 @@ python loadtest/verify_quota.py        # prints "quota enforcement: HOLDS" if sp
 
 ## Benchmarks
 
-Measured values are recorded here as they are produced; conditions are stated next to every number.
+Measured values with their conditions. Raw log and trade-offs: [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md).
+Commands and the full load-test write-up: [`loadtest/README.md`](loadtest/README.md).
 
-| Metric | Value | Conditions |
-|---|---|---|
-| End-to-end latency p50 / p99 | pending | Gemini 3.8 Flash, ~3k-token document, free-tier host |
-| Platform overhead p99 (auth + quota + guardrail heuristics, no model call) | pending | mock provider |
-| Throughput | pending | 50 Locust users, mock provider, one instance |
-| Burst quota test: admitted / refused (402), ledger total vs limit | pending | 50 users against a $0.02 budget |
-| Cost per request | pending | Gemini 3.8 Flash list price, bullets, 150 words |
-| Red-team catch rate / false-positive rate / added latency (heuristics only) | 96 % / 2 % / p50 0.10 ms, p99 0.41 ms | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` |
-| Red-team catch rate / false-positive rate (cascade) | 96 % / 2 %; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier |
-| Guardrail classifier cost per 1,000 requests | ≈ $0.015 (instructions) – $0.07 (1.5k-token documents) | 12 % of eval cases in the uncertain band × Flash-Lite list price |
-| Online judge cost per 1,000 requests | ≈ $0.13 | 5 % sampled, 3k-token source, Gemini 3.8 Flash list price |
-| Summarization faithfulness / coverage (LLM judge, 1–5) | pending | `evals/summarization` |
+All numbers below are on `main` @ `72a7ab3`, SQLite on a laptop, mock provider. **The mock is priced
+identically to `gemini-3.8-flash` in `config/prices.yaml`, so dollar figures are real list-price
+arithmetic**; only output *length* is synthetic.
+
+| Metric | Value | Target | Conditions |
+|---|---|---|---|
+| Platform overhead (auth + quota + cache + guardrail heuristics, no model call) | **p50 7 / 8 / 10 ms** for 1.2k / 3.2k / 6.2k-token documents; worst steady-state request 10 ms | p99 ≤ 25 ms ✅ | `latency_sample.py --per-size 20 --sleep 0`, `MOCK_LATENCY_MS=0`, sequential. First request after process start is 12–47 ms (warm-up) and is excluded |
+| Throughput | **228 req/s** | ≥ 50 req/s ✅ | 50 Locust users, 30 s, `MOCK_LATENCY_MS=120`, one instance |
+| Latency under load, p50 / p95 / p99 | **19 / 260 / 670 ms** | — | same run. The p99 is SQLite write-lock contention, not platform overhead (cf. 10 ms uncontended) — `DESIGN.md` §5 limit #1 |
+| Burst quota test: admitted / refused / ledger vs limit | **92 admitted · 4,278 refused (402) · $0.018765 booked of a $0.020000 limit · reserved back to $0** → `quota enforcement: HOLDS` | never exceed the limit ✅ | 50 users on 50 keys of one tenant, 30 s. 2,426 × 429 came from a user class that trips the limiter on purpose |
+| Reservation pessimism | **6.2 %** of budget unspent ($0.001235 = 1.8× the average request) | — | same run. The measured cost of reserve-then-settle (D2): the reserve books worst-case output tokens and settles for less |
+| Cost per request at list price | **$0.002776** (3.2k-token document, bullets, `max_words=150`) | ≤ $0.004 ✅ | 3,192 input + ~102 output tokens. A real 150-word summary is ~200 output tokens → ≈ $0.0031, still inside target |
+| Guardrail classifier cost per 1,000 requests | ≈ **$0.015** (instructions) – **$0.07** (1.5k-token documents) | — | 12 % of eval cases in the uncertain band × Flash-Lite list price (Thrishal) |
+| Online judge cost per 1,000 requests | ≈ **$0.13** | — | 5 % sampled, 3k-token source, Gemini 3.8 Flash list price; billed to the platform, not tenants (D17) (Thrishal) |
+| Metric cardinality | **85 series** (135 `/metrics` lines incl. HELP/TYPE) | — | 1 tenant, 1 model. Grows with tenants × models; the `tenant` label is `DESIGN.md` §5 limit #4 |
+| End-to-end latency p50 / p99 (real model) | *pending* — needs a Gemini key | p50 ≤ 3 s, p99 ≤ 8 s | `latency_sample.py`, 30 paced requests at three sizes. Script verified against the mock |
+| Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 2 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` (Thrishal) |
+| Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %**; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier (Thrishal) |
+| Summarization faithfulness / coverage (LLM judge, 1–5) | *pending* | ≥ 4.0 / ≥ 3.5 | `make eval-summ PROVIDER=gemini` — awaiting the golden set and judge (Sai) |
+
+Traffic-control micro-benchmarks (Suraj): rate-limit check p50 747 µs / p99 1,404 µs on Postgres;
+fixed-window edge burst measured at exactly the 2.0× rpm bound D3 accepts; image 460 MB; local cold
+start 1.1 s.
+
+**Not yet measured:** the burst re-run on Postgres (SQLite serialises writes, so the current run
+holds for a weaker reason than the atomic reserve winning a real race), the run against the
+deployment, and anything needing a real provider key.
 
 ## Observability
 
