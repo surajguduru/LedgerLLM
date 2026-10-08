@@ -74,7 +74,7 @@ operations are not one click behind a browser session.
 | Prompt | add `prompts/summarize_vN.yaml`, merge, then set `SUMMARIZE_PROMPT_VERSION=summarize_vN` | set the variable back (Render restarts the service; no build) |
 | Guardrail layer | deploy with `GUARDRAILS_MODE=shadow`, read the shadow report, then `enforce` | set `shadow` or `off` |
 | Response cache | on by default; TTL per plan in `config/plans.yaml` | `RESPONSE_CACHE_ENABLED=false` |
-| Schema | additive only (new tables and nullable columns), created on start | old code ignores the new columns |
+| Schema | new tables only: `create_all` creates missing tables at start and never alters an existing one, so a new column needs a manual `ALTER TABLE` on Neon before the deploy | old code ignores a column it does not know; a new table can stay |
 
 ## Operating notes
 
@@ -84,3 +84,10 @@ operations are not one click behind a browser session.
   every 5 minutes, which suits Neon's connection cap and idle suspension.
 - **Fallback host.** Hugging Face Spaces (Docker SDK) runs the same image; the container honours `PORT`.
 - **Database down.** The pipeline fails closed: no budget reservation means no model call, and the client gets 500.
+- **Region.** `render.yaml` pins `region: ohio` to sit next to the Neon database, but Render cannot move an existing
+  service: the field applies to services created from the blueprint. A service first created in Oregon stays there
+  (about 860 ms of cross-region database round trips per request, README benchmarks) until it is recreated in Ohio.
+- **Free-tier quotas.** Gemini's free tier allows 20 `gemini-3.8-flash` requests per project per day, shared by every
+  tenant and by the online judge, whose model defaults to `DEFAULT_MODEL`. On free-tier keys set
+  `QUALITY_JUDGE_MODEL=gemini-3.5-flash-lite`, and enable the fallback chain (`LLM_FALLBACK_PROVIDER=gemini`,
+  `LLM_FALLBACK_MODEL=gemini-3.5-flash-lite`); the blueprint sets neither, so add them in the service's Environment tab.

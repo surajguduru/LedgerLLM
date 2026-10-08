@@ -38,15 +38,17 @@ Adding a column to a table your package owns is fine; mention it in the PR. Ther
 
 ## Tests
 
-`make test`. Tests marked `xfail` describe behaviour that is designed but not yet implemented; the reason
-names the owner. Remove the marker when the behaviour lands. `tests/test_smoke.py` covers the end-to-end
-pipeline and must stay green on every PR.
+`make test` runs the suite on SQLite with the mock provider (690 tests, about 10 s). There are no `xfail`
+markers left; a test that fails is a regression. `tests/test_smoke.py` covers the end-to-end pipeline and must
+stay green on every PR.
 
-Run against Postgres locally:
+Run against Postgres locally. The suite drops and recreates every table in the database it points at, so give it
+its own database rather than the one the docker-compose app uses:
 
 ```bash
 docker compose up -d db
-DATABASE_URL=postgresql+psycopg://ledger:ledger@localhost:5432/ledger make test
+docker exec ledgerllm-db-1 psql -U ledger -c "CREATE DATABASE ledger_test"   # once
+DATABASE_URL=postgresql+psycopg://ledger:ledger@localhost:5432/ledger_test make test
 ```
 
 ## Secrets and spend

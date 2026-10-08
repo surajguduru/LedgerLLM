@@ -1,6 +1,6 @@
 # LedgerLLM — Design
 
-Status: v0.1 base. This document explains what the system does, how it is built, which decisions were
+Status: as built on 8 Oct 2026 (decisions D1–D27). This document explains what the system does, how it is built, which decisions were
 made and why, how it fails, and how it is operated.
 
 ---
@@ -43,7 +43,8 @@ is a dependency; the system around it — metering, quotas, safety, audit — is
 | Development and evaluation API spend | $0 (Gemini free tier) — fall back to ≤ $20 if a paid key is needed | provider console |
 
 **Scope.** In: all of the above, a public deployment, CI eval gates, a Grafana dashboard, load-test evidence.
-Out: end-user accounts and OAuth (API keys only), card payments (we meter and bill in a ledger), streaming responses,
+Out: OAuth and hosted identity (API keys, plus the portal's own e-mail + password sign-in), a real card processor (the
+portal's plan checkout runs a mock processor, D27; model spend is metered in the ledger), streaming responses,
 multi-region deployment. Stretch: PDF ingestion, semantic cache, Langfuse tracing.
 
 ---
@@ -110,10 +111,12 @@ billable call: purpose, model, tokens, cost, reservation estimate, price_version
 
 ### 2.4 Deployment
 ```
-GitHub main ── CI: ruff · pytest (SQLite + Postgres) · red-team gate · summarization gate ──▶ Render (Docker, 1 instance)
-                                                                                              ├─▶ Neon Postgres
-                                                                                              └─▶ Gemini API (OpenAI-compatible endpoint)
-Local: docker compose = app + postgres + prometheus + grafana
+GitHub main ── CI: ruff · pytest (SQLite + Postgres) · red-team gate · summarization gate ──▶ Render web service `ledgerllm` (Docker, 1 instance)
+                                                                                              ├─▶ Neon Postgres (read-write endpoint)
+                                                                                              ├─▶ Gemini API (OpenAI-compatible endpoint); Groq / Anthropic per model when their keys are set
+                                                                                              └─▶ Render web service `ledgerllm-admin`: Grafana over a Neon read-only endpoint
+Production has no Prometheus: /metrics is served (bearer token) but nothing scrapes it there.
+Local: docker compose = app + postgres + prometheus (+ alert rules) + grafana
 ```
 
 ---
@@ -145,7 +148,7 @@ Local: docker compose = app + postgres + prometheus + grafana
 | D21 | Summary-quality eval on **Groq's free tier**: `qwen/qwen3.8-27b` summarises through the production prompt and pipeline, `openai/gpt-oss-120b` judges (`reasoning_effort` low, its own provider instance so the summarizer sends none); strict JSON with a 1/3/5 rubric and one retry, cases with no valid judgement excluded from the means but gated at ≤ 10 %; calls paced per model by requests (8 rpm) and by a 60 s token window (7,000 of Groq's 8,000 tokens/min, each call charged prompt + max_tokens, as Groq does), back-off that follows the server's Retry-After (else 15/30/60 s); the full 30 cases run locally with results committed, an 8-case `ci` subset gates PRs; plus a human calibration set (`agreement.py`); the mock run gates plumbing only. Gemini (flash summarises, flash-lite judges) remains selectable with `--provider gemini` | Gemini only (flash + flash-lite, the original choice); programmatic checks only; a paid judge; human eval only | Zero cost: Gemini's free tier allows 20 requests/day on gemini-3.8-flash, so a 30-case judged run (60 calls) can never finish there; Groq allows 1,000/day. The judge is a larger model from a different family than the summarizer, which reduces self-preference bias more than a same-family sibling did. Keyword checks cannot see invented facts; human-only scoring cannot gate every PR. Calibration says how far the judge can be trusted | The eval measures the **prompt and pipeline on Qwen, not the production model** (`DEFAULT_MODEL` is still Gemini), so a Gemini-specific regression would not show; a paid setup would summarise with the production model itself and judge with a stronger model from another vendor (or two judges, reporting disagreement). Throughput is bounded by 8,000 tokens/min per model: the 30 cases take ~21 min, which is why CI runs the 8-case subset (~4 min); the subset can miss a regression on the other 22 cases; one judge, calibrated only on the rows scored by hand (it penalised one summary for leaving out an injected instruction, see MEASUREMENTS.md) |
 | D22 | Output moderation: canary / foreign-URL / toxicity → **withhold**; PII → **redact and return** | Withhold everything; or redact everything | A canary or an invented link proves the model obeyed the document, so the whole summary is untrusted. PII in a summary is usually faithful to the source, the tenant already paid for the completion, and the request log is redacted anyway — serving `[EMAIL]` keeps the response useful | Redacted summaries are not cached; one extra branch in the pipeline |
 | D23 | Guardrail-classifier tokens are billed (own ledger row, added to `spent`) but not included in the reservation | Add a per-plan `guardrail_allowance_usd` to every reservation | The model classifier (D15) is off by default and, when on, runs only on inputs the heuristics are unsure about, cached by text hash; an allowance on every request would refuse requests near the limit to cover spend that is usually zero (measured: 0 % of spend with `GUARDRAIL_LLM=off`); the completion — the large cost — always stays inside its reservation | With the classifier on, `spent` can exceed the hard limit by at most two classifier calls (instructions + document, ≤ $0.0011 at list price) per request in flight at the boundary; once over, every further request is refused. Revisit (add the allowance) if the guardrail share of spend becomes material |
-| D24 | Tenant portal served by the API (`/app`): self sign-up with e-mail + password (scrypt), cookie sessions stored as sha256 like API keys (HttpOnly, SameSite=Strict, Secure outside dev), state changes only as same-origin JSON POSTs, self-service keys with no per-tenant cap (like OpenRouter and LiteLLM: spend and rate are limited, not key count), per-key and daily usage from the ledger | Separate SPA with token auth; hosted identity provider; admin-only key management | One deployable and no build step (as D14); no third-party account or outage dependency; the cookie + JSON + Origin rules close CSRF without a token framework; per-key usage needs no new tracking because every ledger row already carries `key_id` | No password reset or e-mail verification yet (no mail service); one user per tenant; rate limits are per key, so many keys multiply a tenant's requests/minute (spend stays capped by the tenant budget) |
+| D24 | Tenant portal served by the API (`/app`): self sign-up with e-mail + password (scrypt), cookie sessions stored as sha256 like API keys (HttpOnly, SameSite=Strict, Secure outside dev), state changes only as same-origin JSON POSTs, self-service keys with no per-tenant cap (like OpenRouter and LiteLLM: spend and rate are limited, not key count), per-key and daily usage from the ledger | Separate SPA with token auth; hosted identity provider; admin-only key management | One deployable and no build step (as D14); no third-party account or outage dependency; the cookie + JSON + Origin rules close CSRF without a token framework; per-key usage needs no new tracking because every ledger row already carries `key_id` | No password reset or e-mail verification yet (no mail service); one user per tenant; rate limits are per key and per tenant (the plan's rpm is the tenant's), so extra keys do not multiply a tenant's requests per minute |
 | D25 | Budgets are in **USD only**; no separate monthly token limit | A `monthly_token_limit` per plan alongside the USD budget | Tokens are already the input to cost (`tokens × $/MTok` from the versioned price table), so a USD cap bounds tokens on every model at once; a token cap would need a per-model exchange rate to mean the same thing on Flash-Lite and Opus, and two limits give two different 402s to explain. Token totals are still reported per tenant, model and purpose by `/v1/usage` and `ledgerllm_tokens_total` | A tenant who wants a token quota must translate it to dollars; the requirement's "token/cost budgets" is met through cost |
 | D26 | Route each model to the provider that serves it: `provider` and `reasoning_tokens` per model in `prices.yaml`, one key per provider, `LLM_PROVIDER` as the default | One provider per deployment (the previous design); or one deployment per provider | Plans could list Groq or Claude models that a Gemini deployment then sent to Gemini, where they failed; free tiers differ per provider (Gemini refused 18/30 calls in the latency run, Groq 4/30), so serving several spreads load across them. Unavailable models are refused before any budget is reserved. Reasoning headroom is part of the output cap, so the reservation covers it | Keys for several providers to manage; a model's provider is configuration that has to be right; one more field in the price table (a new price version) |
 | D27 | Self-service plan changes in the portal (`/app/billing`): each plan has a `price_usd_month` in `plans.yaml`, separate from its model-spend budget; moving to a paid plan charges that price once through a **mock processor** (`app/billing/payments.py`: Luhn, expiry and CVC checks, then always succeeds) and writes a `payments` row with brand and last four digits only; the change is immediate in both directions with no proration or refund, and this month's `budget_periods` limit is updated in the same transaction; an admin budget override survives the change | A real processor (Stripe/Razorpay) now; downgrade at period end; one-click upgrade with no card form | Plan enforcement already reads `tenant.plan` on every request (D24, budget rollover), so an upgrade needs no new enforcement, only a price and a record; the processor sits behind one `charge()` function so a real one replaces it without touching the endpoint; immediate changes need no scheduler or pending-plan state | No recurring billing: a plan is paid once at the switch and never renewed; no proration, so a downgrade forfeits the rest of the period and an upgrade late in the month pays full price; a tenant already over a lower plan's budget gets 402 until next month; card fields are format-checked only |
@@ -176,9 +179,10 @@ Local: docker compose = app + postgres + prometheus + grafana
 
 **Deployment and rollout.** Stateless FastAPI container on Render with managed Postgres on Neon. A pull request must
 pass lint, the test suite on SQLite and Postgres, the red-team gate and (when prompts or feature code change) the
-summarization gate; merging to `main` deploys once the merge commit's checks pass (`autoDeployTrigger: checksPass` in `render.yaml`; branch protection on `main` with these checks required is the repo-settings half). A new prompt ships as a new YAML file and goes live by setting
+summarization gate; a `main` commit deploys once its GitHub checks finish without failure (`autoDeployTrigger: checksPass` in `render.yaml`; CI runs on pull requests and direct pushes and skips merge commits, which Render counts as passing, so the gate is the PR's checks; `main` has no branch protection yet). A new prompt ships as a new YAML file and goes live by setting
 `SUMMARIZE_PROMPT_VERSION`; rollback is setting it back. A new guardrail layer ships in `GUARDRAILS_MODE=shadow`
-first, then `enforce`. Code rollback is Render's redeploy-previous. Schema changes are additive only.
+first, then `enforce`. Code rollback is Render's redeploy-previous. Schema changes are new tables only: `create_all` creates
+missing tables at start and never alters an existing one, so a new column needs a manual `ALTER TABLE` before the deploy.
 
 **Monitoring.**
 | Category | Signals | Source |
@@ -189,6 +193,11 @@ first, then `enforce`. Code rollback is Render's redeploy-previous. Schema chang
 | Quality | feedback ratio per prompt version; offline eval scores per prompt hash; async judge scores on a 5 % sample of live summaries, per prompt version (`ledgerllm_quality_score`, `GET /admin/quality`) | `feedback`, `evals/`, CI artefacts |
 | Drift | cost and tokens per request per tenant and model over time; guardrail block-rate trend; sampled quality mean per prompt version, last 24 h against the week before (`GET /admin/quality` → `drift`, flagged at a 0.5-point drop over ≥ 10 samples) | `/admin/quality`; Prometheus rules for cost and block rate (stretch) |
 | Cost | micro-USD per tenant vs budget, soft warnings, 402 count | ledger, dashboard |
+
+Where each source runs: Prometheus, the operational Grafana dashboard and `ops/alerts.yml` run in the docker-compose
+stack (or any self-hosted Prometheus pointed at `/metrics`); production has the admin Grafana over a Neon read replica
+(`ops/grafana/dashboards/admin.json`: fleet totals, spend per tenant, latency against the §1 targets from
+`request_logs`, outcomes by error code, audit trail) plus `GET /admin/quality` and the structured logs on Render.
 
 **Evaluation.** Offline: the red-team set (catch rate, false-positive rate, latency), the golden summarization set
 (programmatic checks on every PR; LLM-judge faithfulness and coverage on prompt changes), redaction cases as tests.
