@@ -28,6 +28,7 @@ class Plan:
     max_input_chars: int
     allowed_models: tuple[str, ...]
     cache_ttl_s: int = 0  # response cache lifetime; 0 = cache off for this plan
+    default_model: str | None = None  # used when a request names no model; else DEFAULT_MODEL
 
 
 @dataclass(frozen=True)
@@ -42,20 +43,27 @@ class PlanCatalog:
             raise ValueError(f"unknown plan '{name}'") from exc
 
 
+def parse_plan(name: str, p: dict) -> Plan:
+    plan = Plan(
+        name=name,
+        rpm=int(p["rpm"]),
+        monthly_budget_microusd=usd_to_microusd(float(p["monthly_budget_usd"])),
+        max_input_chars=int(p["max_input_chars"]),
+        allowed_models=tuple(p.get("allowed_models", [])),
+        cache_ttl_s=int(p.get("cache_ttl_s", 0)),
+        default_model=p.get("default_model"),
+    )
+    if plan.default_model and plan.default_model not in plan.allowed_models:
+        raise ValueError(
+            f"plan '{name}': default_model '{plan.default_model}' is not in allowed_models"
+        )
+    return plan
+
+
 @lru_cache
 def load_plans() -> PlanCatalog:
     raw = yaml.safe_load(get_settings().plans_path.read_text())
-    plans = {
-        name: Plan(
-            name=name,
-            rpm=int(p["rpm"]),
-            monthly_budget_microusd=usd_to_microusd(float(p["monthly_budget_usd"])),
-            max_input_chars=int(p["max_input_chars"]),
-            allowed_models=tuple(p.get("allowed_models", [])),
-            cache_ttl_s=int(p.get("cache_ttl_s", 0)),
-        )
-        for name, p in raw["plans"].items()
-    }
+    plans = {name: parse_plan(name, p) for name, p in raw["plans"].items()}
     return PlanCatalog(
         plans=plans, soft_warning_fraction=float(raw.get("soft_warning_fraction", 0.8))
     )

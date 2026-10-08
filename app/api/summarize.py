@@ -272,7 +272,7 @@ def _pipeline(
         )
 
     # 4. acquire content -----------------------------------------------------------------------
-    model = payload.model or settings.default_model
+    model = payload.model or plan.default_model or settings.default_model
     if model not in plan.allowed_models:
         raise _fail(
             db,
