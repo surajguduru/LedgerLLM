@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     default_model: str = "gemini-3.8-flash"
     anthropic_api_key: str | None = None  # legacy alias for the anthropic provider
     llm_timeout_s: float = 30.0
+    # reasoning_effort for OpenAI-compatible providers. None: preset default (Gemini "low"); "": don't send.
+    llm_reasoning_effort: str | None = None
 
     # Admin
     admin_token: str = "dev-admin-token-change-me"

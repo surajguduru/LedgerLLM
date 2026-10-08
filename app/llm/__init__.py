@@ -2,6 +2,7 @@
 
 LLM_PROVIDER selects: mock (default; free, offline) · gemini (free tier) · groq · openai · openrouter · ollama ·
 openai_compat (custom LLM_BASE_URL) · anthropic (official SDK). LLM_API_KEY is the key for whichever is selected.
+LLM_REASONING_EFFORT overrides the preset's reasoning_effort (unset: preset default; empty: do not send).
 """
 
 from __future__ import annotations
@@ -37,6 +38,9 @@ def get_provider() -> LLMProvider:
         )
     if name != "ollama" and not s.llm_api_key:
         raise ValueError(f"LLM_PROVIDER={name} requires LLM_API_KEY")
+    kwargs = {}
+    if s.llm_reasoning_effort is not None:
+        kwargs["reasoning_effort"] = s.llm_reasoning_effort
     return OpenAICompatibleProvider(
-        name=name, base_url=base_url, api_key=s.llm_api_key, timeout_s=s.llm_timeout_s
+        name=name, base_url=base_url, api_key=s.llm_api_key, timeout_s=s.llm_timeout_s, **kwargs
     )
