@@ -130,7 +130,8 @@ Headers on every response: `X-Request-ID`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 | Endpoint | Purpose |
 |---|---|
 | `POST /v1/summarize` | the feature; body: `url` **or** `text`, optional `instructions`, `style`, `max_words`, `model` |
-| `GET /v1/usage` | current-month spend, remaining budget, tokens, breakdown by model and purpose |
+| `GET /v1/usage` | current-month spend, remaining budget, tokens, breakdown by model, purpose and UTC day, last 10 ledger rows |
+| `GET /v1/usage/statement.csv?period=YYYY-MM` | itemised statement: every ledger row of the month plus a `TOTAL` line that equals the bill |
 | `POST /v1/feedback` | thumbs up/down on a `request_id` |
 | `GET /dashboard` | usage/billing page for a tenant (paste a key) |
 | `POST /admin/tenants`, `POST /admin/tenants/{id}/keys`, `GET /admin/tenants` | tenant and key management (`Authorization: Bearer $ADMIN_TOKEN`) |
@@ -150,6 +151,38 @@ Errors always look like `{"error": {"code": "…", "message": "…", "request_id
 | `prompts/summarize_v1.yaml` | system prompt + user template; the document is wrapped as data; a content hash is recorded per request |
 
 Rolling out a new prompt = add `summarize_v2.yaml` and set `SUMMARIZE_PROMPT_VERSION`. Rolling back = set it back.
+
+## Cost attribution & budgets
+
+Every model call is one row in `usage_ledger`, priced in integer micro-USD from a versioned price table, so any
+past bill can be reproduced exactly. A completion row, as it appears in the CSV statement:
+
+```
+created_at,request_id,key_id,purpose,model,input_tokens,output_tokens,cost_microusd,cost_usd,price_version,prompt_version,status
+2026-10-08T06:22:07+00:00,be4f885a…,2c8ab36e…,completion,gemini-3.8-flash,1101,89,1160,0.001160,2026-10-04,summarize_v1@ec6822c047b1,ok
+```
+`1101 × $0.75 + 89 × $3.75` per million tokens = 1,160 µUSD. Guardrail-classifier calls get their own rows
+(`purpose=guardrail`) and cache hits a zero-cost row (`status=cached`); completion rows also store the reservation
+estimate so the pessimism of admission control is measurable from the ledger. Online-judge calls (D17) are
+listed under the tenant with `billed=no` and left out of every total, because the platform pays for them.
+
+Each request atomically **reserves** its worst-case cost (`UPDATE … SET reserved += est WHERE spent + reserved + est
+<= limit`) before any model call, and **settles** the actual cost afterwards, releasing the reservation; a failed call
+releases it without billing. Because the limit check and the reservation are one statement, a burst can never pass on a
+stale `spent`. Past 80 % of the limit every response carries `X-Budget-Warning`, and exactly one `budget.soft_warning`
+audit event is written per tenant per month. A new UTC month starts a fresh budget row; a plan or override change
+applies from the next request.
+
+| Measurement | Value | Conditions |
+|---|---|---|
+| Burst of 50 concurrent requests, $0.004 budget | 4 admitted, 46 × 402; spent $0.002628 (66 % of limit), ledger total = spent, nothing left reserved | Postgres 16, mock provider with 50 ms latency, `python -m scripts.bench_billing burst` |
+| Same burst with *check `spent`, then call* (the design D2 rejects) | 10 admitted; spent $0.006570 = **164 % of the limit** | same |
+| Reservation pessimism (estimate ÷ actual) | median 1.43×, p95 1.84× | 9 requests, 3 styles × 50/150/300 words, ~3k-token document, mock token counts, `python -m scripts.bench_billing costs` |
+| Cost of a ~3k-token request at `gemini-3.8-flash` list price | $0.0027 actual, reserved $0.0031–$0.0050 depending on `max_words` | same; real-model output lengths pending a Gemini run |
+| Guardrail share of spend | 0 % | `GUARDRAIL_LLM=off` (the default): heuristic guardrails make no model calls |
+
+The 34 % headroom in the burst row is the accepted cost of D2: the last requests that would have fit are refused
+because their worst case would not. Decision D23 in `docs/DESIGN.md` covers how guardrail spend relates to the limit.
 
 ## Rate limits, idempotency, cache
 

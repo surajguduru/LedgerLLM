@@ -97,6 +97,8 @@ class UsageSummary(BaseModel):
     output_tokens: int
     by_model: list[dict]
     by_purpose: list[dict]
+    by_day: list[dict] = []  # [{date: "YYYY-MM-DD" (UTC), requests, cost_usd}], oldest first
+    last_requests: list[dict] = []  # the 10 most recent ledger rows, newest first
 
 
 # --- admin -----------------------------------------------------------------------------------

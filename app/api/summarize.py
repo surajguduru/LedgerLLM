@@ -497,7 +497,19 @@ def _pipeline(
             f"{microusd_to_usd(decision.spent_microusd + decision.reserved_microusd):.4f} of "
             f"{microusd_to_usd(decision.limit_microusd):.2f} USD committed this period"
         )
-        # TODO(Naresh): emit audit_events.BUDGET_SOFT_WARNING exactly once per period (budget_periods.soft_warned_at)
+    if decision.first_warning:
+        audit(
+            db,
+            audit_events.BUDGET_SOFT_WARNING,
+            tenant_id=tenant.id,
+            key_id=key.id,
+            request_id=request_id,
+            details={
+                "period": decision.period,
+                "limit_microusd": decision.limit_microusd,
+                "committed_microusd": decision.spent_microusd + decision.reserved_microusd,
+            },
+        )
 
     # 6. input guardrail -----------------------------------------------------------------------
     mode = settings.guardrails_mode
@@ -628,8 +640,10 @@ def _pipeline(
 
     # 9. settle + ledger -----------------------------------------------------------------------
     # One ledger row per model call, all purpose="completion"; the stage is in prompt_version.
+    # The request's single reservation is recorded on its first row, so estimate/actual per
+    # request is SUM(estimate) / SUM(cost) grouped by request_id.
     actual_microusd = 0
-    for s in stages:
+    for i, s in enumerate(stages):
         r = s.result
         cost = compute_cost_microusd(r.model, r.input_tokens, r.output_tokens)
         actual_microusd += cost
@@ -646,6 +660,7 @@ def _pipeline(
             price_version=load_prices().version,
             prompt_version=prompt_version + s.ledger_suffix,
             latency_ms=r.latency_ms,
+            estimate_microusd=est_microusd if i == 0 else None,
         )
         metrics.record_booking(
             tenant=tenant.id,

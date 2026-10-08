@@ -106,6 +106,8 @@ class UsageLedger(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="ok"
     )  # ok|error|blocked|cached
+    # worst-case cost reserved for this call (completion rows only); NULL where nothing was reserved
+    estimate_microusd: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 Index("ix_usage_ledger_tenant_created", UsageLedger.tenant_id, UsageLedger.created_at)

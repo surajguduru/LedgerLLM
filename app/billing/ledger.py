@@ -1,4 +1,8 @@
-"""Writes the per-call cost attribution row. Everything billable goes through here."""
+"""Writes the per-call cost attribution row. Everything billable goes through here.
+
+Completion rows also carry the reservation estimate, so estimate/actual (how pessimistic the
+reservation is, D2) can be measured from the ledger alone.
+"""
 
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ def book(
     prompt_version: str | None,
     latency_ms: int,
     status: str = "ok",
+    estimate_microusd: int | None = None,
 ) -> UsageLedger:
     row = UsageLedger(
         tenant_id=tenant_id,
@@ -36,6 +41,7 @@ def book(
         prompt_version=prompt_version,
         latency_ms=latency_ms,
         status=status,
+        estimate_microusd=estimate_microusd,
     )
     db.add(row)
     return row
