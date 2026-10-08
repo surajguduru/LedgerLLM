@@ -4,6 +4,10 @@ services:
     name: ledgerllm
     runtime: docker
     plan: free
+    # Match the Neon region (aws-us-east-2). The pipeline makes ~19 database calls per request, so a
+    # cross-region database is ~19 extra network hops: measured at ~860 ms of added latency per
+    # request against 7-10 ms with the database on the same host (docs/MEASUREMENTS.md, 8 Oct).
+    region: ohio
     healthCheckPath: /healthz
     # Deploy a commit on main only after its GitHub checks pass (lint, tests on SQLite and Postgres, both
     # eval gates) — what the README promises. `commit` would deploy on push, before CI has an answer.
@@ -25,3 +29,32 @@ services:
         sync: false
       - key: ADMIN_TOKEN
         generateValue: true
+
+  # Admin dashboard: Grafana with our dashboards baked in (ops/grafana/Dockerfile), reading the
+  # production database through a Neon READ REPLICA endpoint. Read-only by design — suspend, revoke,
+  # rotate and plan changes go through /admin/*. Prometheus is deliberately not deployed, so
+  # PROMETHEUS_URL stays unset and the image serves the Admin dashboard only.
+  - type: web
+    name: ledgerllm-admin
+    runtime: docker
+    dockerfilePath: ./ops/grafana/Dockerfile
+    dockerContext: ./ops/grafana
+    plan: free
+    region: ohio
+    healthCheckPath: /api/health
+    autoDeployTrigger: checksPass
+    envVars:
+      # Required: start.sh refuses to boot without it. These dashboards show every tenant's spend.
+      - key: GF_SECURITY_ADMIN_PASSWORD
+        generateValue: true
+      # Neon READ REPLICA (type=read_only) — writes fail at the transaction level, so safety does
+      # not depend on role GRANTs. Neon grants `neon_superuser` to every role it creates and the API
+      # cannot revoke it, so a SELECT-only role is not achievable on this plan.
+      - key: GRAFANA_DB_HOST
+        sync: false
+      - key: GRAFANA_DB_USER
+        sync: false
+      - key: GRAFANA_DB_NAME
+        value: neondb
+      - key: GRAFANA_DB_PASSWORD
+        sync: false
