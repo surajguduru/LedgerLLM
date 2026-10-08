@@ -67,7 +67,7 @@ SIGNALS: list[Signal] = [
         "reveal_system_prompt",
         "prompt_injection",
         0.9,
-        r"\b(reveal|print|show|repeat|leak|output|display|dump|disclose|expose|recite|paste|echo|tell\s+me|what\s+(is|are|was))\s+"
+        r"\b(reveal|print|show|repeat|leak|output|display|dump|disclose|expose|recite|paste|echo|append|attach|copy|quote|tell\s+me|what\s+(is|are|was))\s+"
         r"(me\s+)?(your\s+|the\s+|all\s+|its\s+|any\s+|of\s+your\s+)?(full\s+|complete\s+|exact\s+|entire\s+|original\s+|hidden\s+|secret\s+)?"
         r"(system\s+prompt|hidden\s+instructions?|initial\s+prompt|secret\s+instructions?|developer\s+message|"
         r"original\s+instructions?|internal\s+rules|system\s+message|system\s+instructions?|configuration\s+prompt|instructions\s+above)",
@@ -105,7 +105,7 @@ SIGNALS: list[Signal] = [
         "prompt_injection",
         0.7,
         r"\b(admin|developer|debug|maintenance|override|sudo|root)\s+(mode|access|override|privileges?)\s+"
-        r"(is\s+|has\s+been\s+|are\s+)?(enabled|activated|on|granted|unlocked|active)\b",
+        r"(is\s+|has\s+been\s+|are\s+)?(enabled|activated|granted|unlocked|active|engaged)\b",
     ),
     # --- medium signals: need corroboration ------------------------------------------------------
     _s(
@@ -145,7 +145,7 @@ SIGNALS: list[Signal] = [
         "address_the_ai",
         "prompt_injection",
         0.6,
-        r"\b(to|for|note\s+to|attention|dear|hey|hi|hello|psst|message\s+(to|for)|instructions?\s+(to|for))\s+"
+        r"\b(to|for|note\s+to|attention|dear|hey|hi|hello|psst|message\s+(to|for)|instructions?\s+(to|for))[,\s]+"
         r"(the\s+|any\s+|all\s+|every\s+|whatever\s+)?(ai|assistant|llm|language\s+model|model|chatbot|gpt|claude|gemini|summarizer|bot|agent)s?\b"
         r"\s*(reading|processing|summarizing|summarising|that\s+(reads|is\s+reading|processes)|which\s+reads|:|,|-|—)",
     ),
@@ -160,13 +160,13 @@ SIGNALS: list[Signal] = [
         "prompt_injection",
         0.6,
         r"\b(in\s+(your|the)\s+(summary|response|answer|output)|(your|the)\s+summary\s+(must|should|will|needs\s+to|has\s+to)|when\s+(you\s+)?summari[sz]ing)"
-        r"[^.\n]{0,80}\b(include|say|write|add|mention|insert|contain|state|recommend|link|end\s+with|start\s+with)\b",
+        r"(?:(?!\.\s)[^\n]){0,80}\b(include|say|write|add|mention|insert|contain|state|recommend|link|end\s+with|start\s+with)\b",
     ),
     _s(
         "instruct_summary_content_rev",
         "prompt_injection",
         0.6,
-        r"\b(include|add|insert|put|mention|embed|place|append)\b[^.\n]{0,80}\bin\s+(your|the)\s+(summary|response|answer|output)\b",
+        r"\b(include|add|insert|put|mention|embed|place|append)\b(?:(?!\.\s)[^\n]){0,80}\b(in|to|into)\s+(your|the)\s+(summary|response|answer|output)\b",
     ),
     _s(
         "stop_summarizing",
@@ -202,7 +202,7 @@ SIGNALS: list[Signal] = [
         "include_literal",
         "prompt_injection",
         0.45,
-        r"\b(include|insert|add|append|put|write|say|print|emit|output)\s+(the\s+|this\s+|these\s+)?(exact\s+)?(phrase|text|words?|string|sentence|link|url|line)\s*['\"“:]",
+        r"\b(include|insert|add|append|put|write|say|print|emit|output)\s+(the\s+|this\s+|these\s+)?(exact\s+)?((phrase|text|words?|string|sentence|link|url|line)\s*)?['\"“]",
     ),
     _s(
         "hidden_markup_instruction",
@@ -221,6 +221,24 @@ SIGNALS: list[Signal] = [
         "prompt_injection",
         0.6,
         r"\b(decode|base64[- ]?decode|unscramble|read\s+backwards|rot13|decrypt|translate)\b[^.\n]{0,60}\b(and\s+)?(follow|execute|obey|do|apply|run|comply)\b",
+    ),
+    _s(
+        "instruct_user_action",
+        "prompt_injection",
+        0.6,
+        r"\btell\s+the\s+(user|reader|human)s?\s+to\s+(click|visit|call|buy|download|install|open|send|go\s+to)\b",
+    ),
+    _s(
+        "persona_as_uncensored",
+        "jailbreak",
+        0.85,
+        r"\b(roleplay|role-play|act|respond|behave|answer|reply)\s+as\s+(an?\s+)?(uncensored|unfiltered|unrestricted|jailbroken|evil|unaligned|rogue)\s+(ai|model|assistant|chatbot|bot|version|llm)\b",
+    ),
+    _s(
+        "ignores_training",
+        "jailbreak",
+        0.6,
+        r"\b(ignores?|ignoring|without|forget(s|ting)?)\s+(its|your|their|all)\s+(training|guidelines|safety|alignment|rules)\b",
     ),
     _s(
         "jailbreak_keyword",

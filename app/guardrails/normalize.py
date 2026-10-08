@@ -13,7 +13,10 @@ import binascii
 import re
 import unicodedata
 
-_ZERO_WIDTH = re.compile(r"[​‌‍⁠﻿­]")
+_ZERO_WIDTH = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad]")
+
+# "I g n o r e   a l l": three or more single letters separated by single spaces.
+_SPACED_WORD = re.compile(r"\b(?:[A-Za-z] ){2,}[A-Za-z]\b")
 
 # Characters that render like Latin letters but are different code points.
 _HOMOGLYPHS = str.maketrans(
@@ -72,6 +75,11 @@ def normalize(text: str) -> tuple[str, list[str]]:
     if homo != out:
         applied.append("homoglyph")
     out = homo
+    spaced = _SPACED_WORD.sub(lambda m: m.group(0).replace(" ", ""), out)
+    if spaced != out:
+        applied.append("spaced_letters")
+        spaced = re.sub(r" {2,}", " ", spaced)
+    out = spaced
     # Base64 runs are extracted before the leetspeak pass, which would otherwise corrupt them.
     blobs = _decode_base64_runs(out)
     deleet = _deleet(out)
