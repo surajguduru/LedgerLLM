@@ -1,4 +1,4 @@
-"""Input/output guardrails. OWNER: Thrishal — two xfail cases to turn green, then grow the red-team set."""
+"""Input/output guardrails."""
 
 import pytest
 

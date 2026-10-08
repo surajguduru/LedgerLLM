@@ -48,7 +48,7 @@ def get_auth_context(
     tenant = db.get(Tenant, key.tenant_id)
     if tenant is None or tenant.status != "active":
         raise ApiError(403, "tenant_suspended", "tenant is not active")
-    # TODO(Loukik): this write-per-request is fine at our scale; batch or sample it at 10x.
+    # TODO: this write-per-request is fine at our scale; batch or sample it at 10x.
     key.last_used_at = utcnow()
     # Puts tenant_id on the http_request log line, so a refusal is traceable to a customer
     # from the logs alone (see app/observability/logging.py).

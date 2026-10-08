@@ -1,6 +1,6 @@
 """Exact-match response cache per tenant.
 
-OWNER: Suraj. Stage 4½ of the pipeline, after content is acquired and before the budget reserve, so a hit
+Stage 4½ of the pipeline, after content is acquired and before the budget reserve, so a hit
 never touches the budget and costs no model call. The key covers tenant, model, prompt content hash, style,
 max_words, instructions, the page title and the extracted text: a changed page, a new prompt version or a different model is
 a miss by construction, and entries are never shared across tenants.

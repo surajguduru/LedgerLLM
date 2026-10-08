@@ -83,7 +83,7 @@ class PortalSession(Base):
 
 
 class RateLimitWindow(Base):
-    """Fixed-window counter per key. Owner: Suraj. Row = (key, minute bucket) -> count."""
+    """Fixed-window counter per key. Row = (key, minute bucket) -> count."""
 
     __tablename__ = "rate_limit_windows"
 
@@ -150,7 +150,7 @@ class IdempotencyRecord(Base):
 
 
 class ResponseCache(Base):
-    """Exact-match response cache. Owner: Suraj. Key = sha256(tenant, model, prompt hash, options, text)."""
+    """Exact-match response cache. Key = sha256(tenant, model, prompt hash, options, text)."""
 
     __tablename__ = "response_cache"
 
@@ -188,7 +188,7 @@ class AuditEvent(Base):
 
 
 class RequestLog(Base):
-    """Redacted request/response log. Owner: Loukik. Never store raw PII here."""
+    """Redacted request/response log. Never store raw PII here."""
 
     __tablename__ = "request_logs"
 
@@ -214,7 +214,7 @@ class RequestLog(Base):
 
 
 class QualitySample(Base):
-    """LLM-judge score for a sampled live summary. Owner: Thrishal. Judge cost is platform cost (D17)."""
+    """LLM-judge score for a sampled live summary. Judge cost is platform cost (D17)."""
 
     __tablename__ = "quality_samples"
 

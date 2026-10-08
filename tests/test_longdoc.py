@@ -1,4 +1,4 @@
-"""Long-document handling (app/feature/longdoc.py, D20). OWNER: Sai."""
+"""Long-document handling (app/feature/longdoc.py, D20)."""
 
 from __future__ import annotations
 

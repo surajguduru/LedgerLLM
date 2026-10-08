@@ -1,4 +1,4 @@
-"""PII redaction. OWNER: Loukik — cases live in evals/redaction/cases.jsonl; add patterns until all pass."""
+"""PII redaction. Cases live in evals/redaction/cases.jsonl."""
 
 import json
 from pathlib import Path
@@ -21,9 +21,7 @@ IMPLEMENTED = {
 @pytest.mark.parametrize("case", CASES, ids=[c["id"] for c in CASES])
 def test_redaction_cases(case):
     if not set(case["expected_types"]) <= IMPLEMENTED:
-        pytest.xfail(
-            f"TODO(Loukik): pattern(s) {set(case['expected_types']) - IMPLEMENTED} not implemented"
-        )
+        pytest.xfail(f"pattern(s) {set(case['expected_types']) - IMPLEMENTED} not implemented")
     res = redact(case["text"])
     for t in case["expected_types"]:
         assert f"[{t.upper()}]" in res.text, res.text

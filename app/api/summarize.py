@@ -430,7 +430,7 @@ def _pipeline(
     )
     page.text, strategy, truncated = prepared.text, prepared.strategy, prepared.omitted > 0
 
-    # 4½. response cache (owner: Suraj) — a hit costs nothing and skips the budget entirely (D16)
+    # 4½. response cache — a hit costs nothing and skips the budget entirely (D16)
     prompt = load_prompt(settings.summarize_prompt_version)
     ckey = cache.cache_key(
         tenant_id=tenant.id,

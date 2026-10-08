@@ -1,4 +1,4 @@
-"""Pydantic request/response models — the public API contract. Changes here need a PR comment to Suraj."""
+"""Pydantic request/response models — the public API contract. Changes here need a PR note (CONTRIBUTING.md)."""
 
 from __future__ import annotations
 

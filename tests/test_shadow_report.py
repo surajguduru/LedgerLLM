@@ -1,4 +1,4 @@
-"""evals/redteam/shadow_report over guardrail.shadow_block audit events. OWNER: Thrishal."""
+"""evals/redteam/shadow_report over guardrail.shadow_block audit events."""
 
 import pytest
 

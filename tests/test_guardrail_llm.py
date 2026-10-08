@@ -1,4 +1,4 @@
-"""The cascaded LLM classifier (layer 2 of the input guardrail). OWNER: Thrishal.
+"""The cascaded LLM classifier (layer 2 of the input guardrail).
 
 Tests run with GUARDRAIL_LLM=off by default; these switch it on and replace the provider with a stub,
 so no network and no cost.

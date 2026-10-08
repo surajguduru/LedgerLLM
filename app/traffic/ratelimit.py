@@ -1,7 +1,6 @@
 """Per-key rate limiting by plan tier (requests per minute).
 
-OWNER: Suraj.
-Contract (do not change signatures without a PR comment to Suraj):
+Contract (signature changes need a PR note to the traffic owner, see CONTRIBUTING.md):
     check_rate_limit(db, key_id, plan, *, tenant_id=None) -> RateLimitResult
     hit(db, bucket, limit) -> RateLimitResult   (any per-minute bucket, e.g. portal login attempts)
 

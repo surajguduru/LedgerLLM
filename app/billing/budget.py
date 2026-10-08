@@ -12,7 +12,6 @@ UPDATE on soft_warned_at (`first_warning`) so the caller writes one budget.soft_
 Rollover: a new UTC month gets a fresh row on its first request. The row's hard limit follows the
 tenant's plan or override on every request, so a mid-month change applies to the next request.
 
-OWNER: Naresh.
 """
 
 from __future__ import annotations

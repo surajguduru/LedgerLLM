@@ -1,10 +1,10 @@
 """GET /dashboard — per-tenant usage/billing page. Paste an API key; it calls /v1/usage client-side.
 
-OWNER: Yashraj. Served by the API rather than as a separate app so there is one deployable and one
+Served by the API rather than as a separate app so there is one deployable and one
 URL (decision D14). Dependency-free apart from Chart.js off a CDN; nothing is persisted in the
 browser, so the pasted key never outlives the tab.
 
-`by_day`, `last_requests` and GET /v1/usage/statement.csv all ship now (Naresh, PR #20), so every
+`by_day`, `last_requests` and GET /v1/usage/statement.csv all ship now, so every
 panel renders. The feature-detection is kept as a safety net: if a field ever disappears the panel
 shows a short note instead of throwing and taking the rest of the page down with it.
 

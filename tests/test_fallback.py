@@ -1,4 +1,4 @@
-"""Provider fallback chain (app/llm/fallback.py). OWNER: Sai. Two OpenAI-compatible providers on MockTransports."""
+"""Provider fallback chain (app/llm/fallback.py). Two OpenAI-compatible providers on MockTransports."""
 
 from __future__ import annotations
 

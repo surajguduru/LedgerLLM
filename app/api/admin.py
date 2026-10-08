@@ -1,7 +1,4 @@
-"""/admin/* — tenant and key management. Protected by ADMIN_TOKEN (Authorization: Bearer <token>).
-
-OWNER: Loukik for hardening: key revoke/rotate endpoints, list keys, suspend tenant, change plan/budget.
-"""
+"""/admin/* — tenant and key management. Protected by ADMIN_TOKEN (Authorization: Bearer <token>)."""
 
 from __future__ import annotations
 
@@ -103,7 +100,7 @@ def create_tenant(
 
 @router.get("/quality")
 def quality(days: int = 7, recent: int = 20, db: Session = Depends(get_db)) -> dict:
-    """Online quality sampling: judge means per prompt version, judge cost, recent samples (owner: Thrishal)."""
+    """Online quality sampling: judge means per prompt version, judge cost, recent samples."""
     return quality_report(db, days=max(1, min(days, 90)), recent=max(1, min(recent, 200)))
 
 
