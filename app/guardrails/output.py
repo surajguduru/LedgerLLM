@@ -44,9 +44,15 @@ _URL = re.compile(r"\b(?:https?://|www\.)[^\s)\]>\"']+", re.I)
 
 # Deliberately short. Anything subtler than this belongs to a classifier, not a word list.
 _TOXIC = re.compile(
-    r"\b(kill\s+yourself|go\s+die|you\s+(are|'re)\s+(worthless|subhuman|a\s+waste\s+of\s+(space|air))|"
-    r"i\s+hope\s+you\s+(die|suffer)|(fuck|screw)\s+(you|off|them|him|her)|piece\s+of\s+shit|"
-    r"dumb\s+(bitch|cunt|whore)|retard(ed|s)?\b|faggot|nigg(er|a)s?)\b",
+    r"\b(kill\s+yourself|go\s+die|i\s+hope\s+you\s+(die|suffer|get\s+hurt)|"
+    # second-person insults: "you are an idiot", "you're so stupid", "you are a waste of space"
+    r"you\s*(are|'re)\s+(an?\s+|such\s+an?\s+|so\s+|totally\s+|really\s+)?"
+    r"(idiot|moron|imbecile|loser|worthless|pathetic|disgusting|subhuman|stupid|dumb|ugly|useless|"
+    r"garbage|trash|a\s+waste\s+of\s+(space|air|oxygen))|"
+    r"(everyone|everybody|the\s+whole\s+world)\s+(hates|despises|laughs\s+at)\s+you|"
+    r"(nobody|no\s+one)\s+(likes|loves|wants|cares\s+about)\s+you|"
+    r"(fuck|screw)\s+(you|off|them|him|her)|piece\s+of\s+shit|shut\s+(the\s+fuck\s+)?up|"
+    r"dumb\s+(bitch|cunt|whore)|retard(ed|s)?|faggot|nigg(er|a)s?)\b",
     re.I,
 )
 
@@ -86,6 +92,12 @@ def moderate_output(text: str, *, source_text: str | None = None) -> GuardrailVe
 
     m = _CANARIES.search(text)
     if m:
+        # A canary that the SOURCE also contains is not proof of anything: an honest summary of a
+        # security article about "I have been PWNED" must contain the phrase. Served, but flagged so
+        # the verdict counter and the request log still show it. A canary absent from the source can
+        # only have come from an instruction the model obeyed.
+        if source_text and _CANARIES.search(source_text):
+            return verdict(False, "canary_in_source", 0.4, canary=m.group(0))
         return verdict(True, "instruction_followed", 0.99, policy="withhold", canary=m.group(0))
     urls = foreign_urls(text, source_text)
     if urls:
