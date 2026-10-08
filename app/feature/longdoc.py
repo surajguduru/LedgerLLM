@@ -69,3 +69,59 @@ def truncate_head_tail(text: str, limit: int) -> tuple[str, int]:
         tail_start = next((t for t in range(want, hi + 1) if _is_boundary(text, t)), want)
     omitted = tail_start - head
     return text[:head] + omission_marker(omitted) + text[tail_start:], omitted
+
+
+# --- chunking for map-reduce ------------------------------------------------------------------
+
+OVERLAP_SHARE = 0.02  # each chunk repeats about this much of the previous one, for context
+_BREAKS = ("\n\n", "\n", ". ", " ")  # preferred cut points, best first
+
+
+def _break_before(text: str, start: int, limit: int) -> int:
+    """End of a chunk that starts at `start` and may run to `limit`: just after the last
+    paragraph break in the second half of the window, else a line, sentence or word break,
+    else a hard cut at `limit`."""
+    floor = start + (limit - start) // 2
+    for sep in _BREAKS:
+        i = text.rfind(sep, floor, limit)
+        if i != -1:
+            return i + len(sep)
+    return limit
+
+
+def _overlap_start(text: str, start: int, end: int, overlap: int) -> int:
+    """Where the next chunk starts: at the last paragraph of the previous chunk when it fits
+    in `overlap` characters, else at the first word break in the last `overlap` characters."""
+    if overlap <= 0:
+        return end
+    lo = max(start + 1, end - overlap)
+    para = text.rfind("\n\n", lo, end - 1)  # excludes the break the chunk ends on
+    if para != -1:
+        return para + 2
+    word = text.find(" ", lo, end - 1)
+    return word + 1 if word != -1 else end
+
+
+def chunk_spans(text: str, max_chars: int, overlap: int | None = None) -> list[tuple[int, int]]:
+    """(start, end) offsets of chunks of at most `max_chars`, cut on paragraph boundaries
+    where possible. Consecutive chunks overlap by up to `overlap` characters (default 2 % of
+    `max_chars`, at most a quarter of it) and together cover every character of `text`."""
+    if max_chars <= 0:
+        raise ValueError("max_chars must be positive")
+    n = len(text)
+    if n <= max_chars:
+        return [(0, n)]
+    overlap = int(max_chars * OVERLAP_SHARE) if overlap is None else overlap
+    overlap = min(overlap, max_chars // 4)
+    spans: list[tuple[int, int]] = []
+    start = 0
+    while n - start > max_chars:
+        end = _break_before(text, start, start + max_chars)
+        spans.append((start, end))
+        start = _overlap_start(text, start, end, overlap)
+    spans.append((start, n))
+    return spans
+
+
+def split_chunks(text: str, max_chars: int, overlap: int | None = None) -> list[str]:
+    return [text[a:b] for a, b in chunk_spans(text, max_chars, overlap)]

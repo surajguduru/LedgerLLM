@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from app.feature.longdoc import omission_marker, truncate_head_tail
+from app.feature.longdoc import chunk_spans, omission_marker, split_chunks, truncate_head_tail
 
 MARKER = re.compile(r"\n\n\[… (\d+) characters omitted …\]\n\n")
 
@@ -79,3 +79,61 @@ def test_marker_digits_change_is_accounted_for():
 
 def test_limit_too_small_for_a_marker_is_a_plain_cut():
     assert truncate_head_tail("hello world, how are you", 5) == ("hello", 19)
+
+
+# --- chunking -------------------------------------------------------------------------------
+
+
+def _paragraphs(n: int, words: int = 40, seed: int = 3) -> str:
+    rng = random.Random(seed)
+    return "\n\n".join(_prose(rng.randint(words // 2, words * 2), seed + i) for i in range(n))
+
+
+def test_text_that_fits_is_one_chunk():
+    assert split_chunks("one paragraph", 100) == ["one paragraph"]
+
+
+def test_chunks_respect_the_size_and_cover_every_character():
+    text = _paragraphs(400)
+    spans = chunk_spans(text, 5_000)
+    assert spans[0][0] == 0 and spans[-1][1] == len(text)
+    for (a, b), (c, _) in zip(spans, spans[1:], strict=False):
+        assert b - a <= 5_000
+        assert a < c <= b  # each chunk starts inside the previous one: nothing skipped
+    assert spans[-1][1] - spans[-1][0] <= 5_000
+
+
+def test_chunks_end_on_paragraph_boundaries():
+    text = _paragraphs(400)
+    for _, b in chunk_spans(text, 5_000)[:-1]:
+        assert text[b - 2 : b] == "\n\n"
+
+
+def test_overlap_is_the_last_paragraph_when_it_is_small():
+    text = _paragraphs(400, words=10)  # paragraphs well under 2 % of 20,000 chars
+    spans = chunk_spans(text, 20_000)
+    for (_, b), (c, _) in zip(spans, spans[1:], strict=False):
+        assert 0 < b - c <= 400  # 2 % of 20,000
+        assert text[c - 2 : c] == "\n\n"  # starts at a paragraph
+        assert "\n\n" not in text[c : b - 2]  # exactly one paragraph repeated
+
+
+def test_long_paragraph_falls_back_to_word_breaks_and_word_overlap():
+    text = _prose(10_000)  # one paragraph, ~70k chars
+    spans = chunk_spans(text, 10_000)
+    for (_, b), (c, _) in zip(spans, spans[1:], strict=False):
+        assert text[b - 1] == " "  # cut after a word
+        assert 0 < b - c <= 200 and text[c - 1] == " "
+
+
+def test_chunk_count_matches_the_length():
+    text = _paragraphs(800)
+    spans = chunk_spans(text, 10_000)
+    assert len(spans) == len(split_chunks(text, 10_000))
+    # each chunk advances by at least half the window minus the overlap
+    assert len(text) / 10_000 <= len(spans) <= len(text) / (5_000 - 200) + 1
+
+
+def test_text_without_any_break_is_cut_hard():
+    spans = chunk_spans("x" * 25_000, 10_000)
+    assert spans == [(0, 10_000), (10_000, 20_000), (20_000, 25_000)]
