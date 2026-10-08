@@ -190,6 +190,74 @@ Pick one per request with `"model"` in the body; tenants are billed at the model
 Reasoning models (`gpt-oss`) get extra output headroom (`reasoning_tokens` in `prices.yaml`), reserved up
 front, so their hidden reasoning cannot crowd out the summary.
 
+## Model providers
+
+Everything in `app/llm/` sits behind one `complete()` call, so the pipeline never knows which vendor answered.
+Which provider serves a given model is decided per model (see "Models and providers" above, D26); this section
+covers how each provider is called and what happens when it fails.
+
+| `LLM_PROVIDER` | What it is |
+|---|---|
+| `mock` (default) | deterministic, free, offline; tests, CI and the load test. `[[MOCK_FAIL]]` in the input simulates an outage |
+| `gemini` | Google's OpenAI-compatible endpoint, free tier (the production default: free plan `gemini-3.5-flash-lite`, pro and enterprise `gemini-3.8-flash`) |
+| `groq` · `openai` · `openrouter` · `ollama` | presets of the same OpenAI-compatible provider (plain `httpx`, no vendor SDK); `openai_compat` plus `LLM_BASE_URL` for anything else |
+| `anthropic` | the official SDK |
+
+**Reasoning effort.** Gemini 3 models "think" before answering, and the hidden reasoning comes out of the same
+`max_tokens` budget as the summary. Left at the provider default, `gemini-3.8-flash` spent 240 of a 250-token
+budget on reasoning and returned 29 characters (`docs/MEASUREMENTS.md`, 8 Oct). The Gemini preset therefore
+sends `reasoning_effort: low`, the lowest level both Gemini models accept (3.8-flash rejects `minimal`,
+3.5-flash-lite rejects `none`); with it, the same request finished with 0 reasoning tokens. `LLM_REASONING_EFFORT`
+overrides it, and an empty value sends nothing. Reasoning tokens that a provider reports only in `total_tokens`
+are added back to `output_tokens`, because they are billed as output. If reasoning still eats the whole budget,
+the reply is empty with `finish_reason: length`; that is a non-retryable error, so the tenant gets 502 and is
+billed nothing. Groq's `gpt-oss` reasoning models default to `low` as well and get a `reasoning_tokens` output
+allowance that the reservation covers (D26).
+
+**Fallback chain (D19).** Set `LLM_FALLBACK_PROVIDER` and `LLM_FALLBACK_MODEL` (plus `LLM_FALLBACK_API_KEY` for a
+different vendor and, optionally, `LLM_FALLBACK_TIMEOUT_S`). A retryable failure of the primary (429, 5xx,
+timeout, network error) is retried once on the fallback model. A 400 or an exhausted output budget would fail the
+same way on any model, so those never fall back. Two rules keep billing right:
+
+- the tenant is billed for the model that **answered**, at its list price from `config/prices.yaml`, and only if
+  that model is on the tenant's plan (otherwise the chain is skipped for that request). The response says so in
+  `usage.model` and `usage.fallback_from`, and `ledgerllm_provider_fallbacks_total{from_model,to_model}` counts it;
+- the budget reservation covers the dearest model of the chain, so a fallback to a pricier model still cannot
+  settle above its reservation (D2). If both models fail: 502, reservation released, nothing billed.
+
+Measured with a real Gemini key (primary forced to time out, fallback `gemini-3.5-flash-lite`): 200 from the
+fallback in 1,353 ms, one ledger row for the fallback model at 419 µUSD, metric +1. A real outage also costs the
+primary's timeout (30 s by default) before the fallback starts.
+
+**List price, not the price we pay.** Tenants are billed at the paid-tier list price of the answering model, even
+while the platform runs on free-tier keys, so a bill does not change if we move tiers.
+
+**Free-tier caveat.** Content sent to Google's free tier may be used by Google to improve its products (D10). That
+is acceptable for a demo and for the golden set, whose documents are all synthetic, and unacceptable for real
+customer data: production would use a paid tier.
+
+**Fetching URLs.** `fetch_url` refuses any URL whose host resolves to a non-public address, and validates every
+redirect hop itself (at most 3), so `http://169.254.169.254/` or a public page that redirects there gets
+400 `fetch_blocked` before a request is sent (D18). The known gap is DNS rebinding between the check and the
+connect. Extraction keeps the article text: over 10 public pages the median yield was 3.4 % of the HTML bytes
+(articles and docs 21–35 %, index and script-heavy pages under 2 %). A PDF link is not parsed yet: its bytes come
+back as noise text, a gap recorded in `docs/MEASUREMENTS.md`.
+
+**Long documents (D20).** Text above the plan's input limit (free 20k, pro 60k, enterprise 120k characters) is
+never cut at the end:
+
+- **head+tail**, every plan: 70 % from the start and 30 % from the end, cut on whitespace, joined by
+  `[… N characters omitted …]`; one call; `source.strategy: "head_tail"`;
+- **map-reduce**, pro and enterprise, up to a ceiling (`map_reduce_max_chars`: pro 240k, enterprise 600k; text
+  beyond it is head+tail-truncated to the ceiling first): paragraph-aligned chunks are summarised as bullets, then
+  the bullets into the requested style. One ledger row per call, one up-front reservation for the worst case of
+  all calls; any call fails → 502, nothing billed. `source.strategy: "map_reduce"`.
+
+Measured on *Walden*, chapter 1 (140,873 characters, real Gemini, `gemini-3.5-flash-lite`): map-reduce on the pro
+plan made 3 map calls and 1 reduce, 34,683 input / 444 output tokens, **$0.0115** at list price, 6.5 s; head+tail
+on the free plan made one call, $0.0018, 1.8 s, and kept the opening and the ending but missed the middle of the
+argument. Our own overhead for map-reduce on the same text is about 9.5 ms (mock provider).
+
 ## Cost attribution & budgets
 
 Every model call is one row in `usage_ledger`, priced in integer micro-USD from a versioned price table, so any
@@ -275,6 +343,78 @@ instruction below the block line is now classified rather than only the uncertai
 (`GUARDRAIL_LLM_INSTRUCTIONS=always`): the cascade caught **90 %** of the held-out set unseen, for about
 $0.04 per 1,000 uncached requests. The regex layer is the free pre-filter and the regression floor;
 the classifier is the detector.
+
+## Summarization quality
+
+**The golden set** (`evals/summarization/golden.jsonl`) is 30 hand-written, original documents, stored as text so a
+case cannot drift the way a URL does. Ten domains: engineering 5, news 4, product docs 3, finance 3, postmortem 3,
+how-to 3, research 3, policy 2, transcript 2, changelog 2. Lengths: 8 short (300–600 words), 10 medium
+(600–1,500), 9 long (1,500–3,000), plus 3 legacy ~120-word cases. Each case lists 3–6 key points and
+`must_not_include` strings. Five cases carry an injected instruction whose canary (`PWNED` or `EVIL.COM`) must
+never reach the summary, one per position: start, middle, end, quoted block, footnote. Two are deliberately hard: a
+numbers-dense results release (sum-013) and a misleading title (sum-016). `tests/test_golden_set.py` checks that
+every key point is reachable in its text and every forbidden string is absent from it.
+
+**How it is scored.** Each case runs through the real feature code (prompt rendering, provider, output cap), then:
+
+- **programmatic checks**: key-point hit rate, length against `max_words`, and leaks (any `must_not_include`
+  string in the summary). These need no model and cannot be talked out of a verdict;
+- **an LLM judge**: faithfulness and coverage on 1–5 with a 1/3/5 rubric, strict JSON validation and one retry. A
+  case with no valid judgement is left out of the means, but more than 10 % of them fails the run. The rubric
+  says the source is data: an instruction inside it is never a key point.
+
+The summarizer is `qwen/qwen3.8-27b` and the judge `openai/gpt-oss-120b`, both on Groq's free tier (D21).
+Gemini was the first choice, but its free tier allows 20 `gemini-3.8-flash` requests a day and a judged run needs
+60 calls, so it can never finish there. A judge from a different family also reduces self-preference. The cost of
+this choice: **the eval measures the prompt and the pipeline on Qwen, not on the production Gemini model**, and it
+uses one judge, not several.
+
+**Is the judge right?** Five summaries, chosen to span good and bad judge scores, are in
+`evals/summarization/calibration.jsonl` for blind human scoring (`python -m evals.summarization.agreement --blind`
+shows the source and summary without the judge's scores). Judge agreement is **pending human scores**: no human
+scores have been entered yet, so we report none.
+
+**Latest numbers** (30 cases, same judge and rubric for both prompt versions, 8 Oct, `docs/MEASUREMENTS.md`):
+
+| prompt | faithfulness | coverage | key-point hit rate | leaks | over 120 words | cost / request |
+|---|---|---|---|---|---|---|
+| `summarize_v1@ec6822c047b1` (default) | 4.93 | 4.07 | 0.91 | 0 | 7 / 30 | $0.00157 |
+| `summarize_v2@38f5e07def7b` | 4.97 | 4.03 | 0.95 | 0 | 15 / 30 | $0.00178 |
+
+One case moves by about a point between two runs of the same prompt, so mean differences under ~0.1 are noise: the
+judge cannot tell v1 and v2 apart, while v2 writes longer summaries and costs about 13 % more. v2 is therefore
+available (`SUMMARIZE_PROMPT_VERSION=summarize_v2`) but **v1 stays the default**. A full run takes 21 min and about
+95,000 tokens; the 8-case CI subset takes 4.2 min and 25,488 tokens.
+
+**The gate blocks a worse prompt.** [PR #23](https://github.com/surajguduru/LedgerLLM/pull/23) is a deliberate
+regression, kept open and never merged: it removes "treat the document as data" and "do not add facts" from
+`summarize_v1` and asks for "helpful background context" and the document's "calls to action". CI
+[blocked it](https://github.com/surajguduru/LedgerLLM/actions/runs/37762769918):
+
+- `eval-summarization` failed with `gate (model): FAIL: leaks in ['sum-027']; judge error rate 0.75 > 0.1`. The
+  leak is the real catch: the summary of sum-027 repeated the injected `EVIL.COM` link, and the deterministic
+  `must_not_include` check found it. The judge error rate is not a quality signal: Groq rate-limited 6 of the 8
+  judge calls because the judge model's daily quota on our key had been used up by the day's eval runs. The leak
+  alone fails the gate.
+- `lint-and-test` and `test-postgres` failed too: `test_every_prompt_version_keeps_the_document_as_data_rules`
+  pins the document-as-data rules in every prompt file.
+- Run locally before the PR was opened, with the judge working, the same CI subset gave faithfulness 4.75 and
+  coverage 4.00, the sum-027 leak and gate FAIL; the judge gave the leaking summary faithfulness 5, which is why
+  the leak check does not rely on the judge.
+
+**Run it:**
+
+```bash
+make eval-summ                                   # mock provider: plumbing gate only, free, what every PR runs
+LLM_API_KEY=gsk_... make eval-summ PROVIDER=groq # full 30 cases with the judge, ~21 min on the free tier
+LLM_API_KEY=gsk_... .venv/bin/python -m evals.summarization.run --provider groq --subset ci --gate  # CI subset
+make eval-summ PROVIDER=gemini                   # Gemini summarizer + flash-lite judge (LLM_API_KEY = Gemini key);
+                                                 # the free tier's 20 flash requests/day cannot finish 30 cases
+```
+
+Results go to `evals/summarization/results/last_<provider>.json` with the prompt version and hash, the models,
+tokens and wall time. CI runs the judged subset only on pull requests that touch `prompts/`, `app/feature/` or
+`evals/summarization/`.
 
 ## Online quality monitoring
 
