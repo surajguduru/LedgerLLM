@@ -132,6 +132,7 @@ Local: docker compose = app + postgres + prometheus + grafana
 | Key leak | Revoke; `last_used_at`; audit trail | `api_keys.revoked_at` |
 | Runaway output | `max_tokens` derived from `max_words`, capped by the prompt artifact | `output_token_cap` |
 | Reasoning model spends the output budget → empty text | Gemini preset sends `reasoning_effort=low` (`LLM_REASONING_EFFORT`); hidden reasoning tokens are billed as output so the ledger matches the provider; `finish_reason: length` with empty text → non-retryable `ProviderError` → 502 `upstream_error`, reservation released, nothing billed (the platform absorbs any provider charge) | `test_exhausted_budget_returns_502_and_bills_nothing`; MEASUREMENTS.md reasoning table |
+| Document tries to close the data wrapper / placeholder smuggling | Prompt rendered in one regex pass, so a `{text}` or `{instructions_block}` inside the instructions, title or page is inserted verbatim, never expanded; `<document` / `</document` in any untrusted value is rewritten to `<\document` / `<\/document`, so the rendered prompt has exactly one wrapper. Template and content hash unchanged | `tests/test_prompts.py` |
 
 ---
 
