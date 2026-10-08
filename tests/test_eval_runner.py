@@ -107,15 +107,19 @@ def _rows(scores: list[tuple[int, int] | None]) -> list[dict]:
 
 
 def test_judge_errors_are_excluded_from_means():
-    assert run.judge_gate(_rows([(5, 5)] * 9 + [None]), TH) is True  # 10 % errors, means 5.0
+    assert (
+        run.judge_gate(run.compute_means(_rows([(5, 5)] * 9 + [None])), TH) is True
+    )  # 10 % errors, means 5.0
 
 
 def test_judge_error_rate_above_ten_percent_fails_the_gate():
-    assert run.judge_gate(_rows([(5, 5)] * 8 + [None, None]), TH) is False  # 20 %
+    assert (
+        run.judge_gate(run.compute_means(_rows([(5, 5)] * 8 + [None, None])), TH) is False
+    )  # 20 %
 
 
 def test_all_judge_errors_fail_the_gate():
-    assert run.judge_gate(_rows([None, None, None]), TH) is False
+    assert run.judge_gate(run.compute_means(_rows([None, None, None])), TH) is False
 
 
 class FakeClock:
@@ -212,3 +216,66 @@ def test_case_that_keeps_failing_is_recorded_not_raised():
     )
     assert row["error"].startswith("summary:")
     assert "judge_error" in row["judge"]
+
+
+def test_default_judge_model_is_a_different_model_for_gemini_flash():
+    assert run.default_judge_model("gemini-3.8-flash") == "gemini-3.5-flash-lite"
+    assert run.default_judge_model("llama-3.1-8b-instant") == "llama-3.1-8b-instant"
+
+
+class RoutingProvider(MockProvider):
+    """Summarises like the mock; answers judge calls (JUDGE_SYSTEM) with a fixed score."""
+
+    def __init__(self, reply: str) -> None:
+        super().__init__(latency_ms=0)
+        self.reply = reply
+        self.models: list[str] = []
+
+    def complete(self, *, model, system, user, max_tokens):
+        self.models.append(model)
+        if system == run.JUDGE_SYSTEM:
+            return LLMResult(
+                text=self.reply, model=model, input_tokens=100, output_tokens=20, latency_ms=0
+            )
+        return super().complete(model=model, system=system, user=user, max_tokens=max_tokens)
+
+
+def test_report_meta_separates_summary_and_judge_tokens():
+    prompt = load_prompt()
+    p = RoutingProvider('{"faithfulness": 3, "coverage": 4, "issues": ["invented a number"]}')
+    rows = [
+        run.evaluate_case(
+            _case(), provider=p, prompt=prompt, model="sum", use_judge=True, judge_model="jdg"
+        )
+        for _ in range(2)
+    ]
+    assert p.models == ["sum", "jdg", "sum", "jdg"]
+    report = run.build_report(
+        rows,
+        provider="mock",
+        prompt=prompt,
+        model="sum",
+        judge_model="jdg",
+        rpm=8,
+        wall_time_s=1.25,
+    )
+    meta = report["meta"]
+    assert meta["prompt"] == f"{prompt.version}@{prompt.content_hash}"
+    assert meta["summarizer_model"] == "sum" and meta["judge_model"] == "jdg"
+    assert meta["n"] == 2 and meta["wall_time_s"] == 1.2
+    assert meta["tokens"]["judge"] == 240
+    assert meta["tokens"]["total"] == meta["tokens"]["summaries"] + 240
+    assert meta["means"]["faithfulness"] == 3 and meta["means"]["judge_errors"] == 0
+    assert meta["timestamp_utc"].endswith("Z")
+    assert report["cases"] == rows
+
+
+def test_worst_cases_sorts_by_faithfulness_and_skips_errors():
+    rows = [
+        {"id": "a", "judge": {"faithfulness": 5, "coverage": 5, "issues": []}},
+        {"id": "b", "judge": {"faithfulness": 2, "coverage": 4, "issues": ["x"]}},
+        {"id": "c", "judge": {"judge_error": "no JSON object in reply"}},
+        {"id": "d", "judge": {"faithfulness": 2, "coverage": 1, "issues": ["y"]}},
+        {"id": "e", "judge": {"faithfulness": 4, "coverage": 4, "issues": []}},
+    ]
+    assert [r["id"] for r in run.worst_cases(rows)] == ["d", "b", "e"]

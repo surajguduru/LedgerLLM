@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
@@ -28,6 +29,8 @@ HERE = Path(__file__).parent
 MAX_WORDS = 120
 DEFAULT_RPM = 8  # Gemini free tier is ~10 requests/min per model; leave headroom
 BACKOFF_S = (15, 30, 60)
+# Judge on a different model of the same family: less self-preference, and a separate free-tier quota.
+DEFAULT_JUDGE_MODELS = {"gemini-3.8-flash": "gemini-3.5-flash-lite"}
 
 # Gemini 3 models spend output tokens on hidden reasoning before the answer; 300 tokens can leave an empty reply.
 JUDGE_MAX_TOKENS = 2048
@@ -267,25 +270,104 @@ def progress_line(row: dict) -> str:
     return line + f"  tokens {row['tokens'] + (j or {}).get('judge_tokens', 0)}"
 
 
-def judge_gate(rows: list[dict], th: dict) -> bool:
-    """Means over the cases the judge scored; a judge that errors on more than the allowed share fails.
+def _mean(xs: list[float]) -> float | None:
+    return round(sum(xs) / len(xs), 3) if xs else None
+
+
+def compute_means(rows: list[dict]) -> dict:
+    """Run-level numbers. Judge means cover only the cases the judge scored.
 
     Errored cases are left out of the means rather than scored 0, which would make a flaky judge look like a
-    bad prompt; the error-rate cap stops a broken judge from passing on a handful of lucky cases.
+    bad prompt; the judge error rate is reported (and gated) separately.
     """
-    scored = [r["judge"] for r in rows if "judge_error" not in r["judge"]]
-    errors = len(rows) - len(scored)
-    error_rate = errors / max(1, len(rows))
-    f = sum(j["faithfulness"] for j in scored) / len(scored) if scored else 0.0
-    cov = sum(j["coverage"] for j in scored) / len(scored) if scored else 0.0
-    print(
-        f"  judge faithfulness : {f:.2f}   coverage: {cov:.2f}   judge errors: {errors}/{len(rows)}"
-    )
+    done = [r for r in rows if "hit_rate" in r]
+    judged = [r["judge"] for r in rows if "judge" in r]
+    scored = [j for j in judged if "judge_error" not in j]
+    return {
+        "key_point_hit_rate": _mean([r["hit_rate"] for r in done]),
+        "length_ratio_max": round(max(r["length_ratio"] for r in done), 3) if done else None,
+        "leaked_cases": [r["id"] for r in done if r["leaks"]],
+        "case_errors": sum("error" in r for r in rows),
+        "faithfulness": _mean([j["faithfulness"] for j in scored]),
+        "coverage": _mean([j["coverage"] for j in scored]),
+        "judge_errors": len(judged) - len(scored),
+        "judge_error_rate": round((len(judged) - len(scored)) / len(judged), 3) if judged else None,
+    }
+
+
+def judge_gate(means: dict, th: dict) -> bool:
+    """A judge that errors on more than the allowed share fails, so a broken judge cannot pass on luck."""
+    if means["faithfulness"] is None:
+        return False
     return (
-        bool(scored)
-        and error_rate <= th["max_judge_error_rate"]
-        and f >= th["min_faithfulness"]
-        and cov >= th["min_coverage"]
+        means["judge_error_rate"] <= th["max_judge_error_rate"]
+        and means["faithfulness"] >= th["min_faithfulness"]
+        and means["coverage"] >= th["min_coverage"]
+    )
+
+
+def worst_cases(rows: list[dict], k: int = 3) -> list[dict]:
+    scored = [r for r in rows if "judge" in r and "judge_error" not in r["judge"]]
+    return sorted(scored, key=lambda r: (r["judge"]["faithfulness"], r["judge"]["coverage"]))[:k]
+
+
+def default_judge_model(model: str) -> str:
+    """A different model of the same family judges, to reduce self-preference (D21); else the same model."""
+    return DEFAULT_JUDGE_MODELS.get(model, model)
+
+
+def build_report(
+    rows: list[dict],
+    *,
+    provider: str,
+    prompt,
+    model: str,
+    judge_model: str | None,
+    rpm: float,
+    wall_time_s: float,
+) -> dict:
+    summary_tokens = sum(r.get("tokens", 0) for r in rows)
+    judge_tokens = sum(r.get("judge", {}).get("judge_tokens", 0) for r in rows)
+    meta = {
+        "prompt": f"{prompt.version}@{prompt.content_hash}",
+        "provider": provider,
+        "summarizer_model": model,
+        "judge_model": judge_model,
+        "timestamp_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "n": len(rows),
+        "rpm": rpm,
+        "tokens": {
+            "summaries": summary_tokens,
+            "judge": judge_tokens,
+            "total": summary_tokens + judge_tokens,
+        },
+        "wall_time_s": round(wall_time_s, 1),
+        "means": compute_means(rows),
+    }
+    return {"meta": meta, "cases": rows}
+
+
+def print_report(report: dict) -> None:
+    meta, m = report["meta"], report["meta"]["means"]
+    print(f"summarization eval ({meta['provider']}, prompt {meta['prompt']}, n={meta['n']})")
+    print(
+        f"  key-point hit rate : {m['key_point_hit_rate'] or 0:.2f}   "
+        f"length ratio max: {m['length_ratio_max'] or 0:.2f}   leaks: {m['leaked_cases']}"
+    )
+    if meta["judge_model"]:
+        print(
+            f"  judge ({meta['judge_model']}) faithfulness: {m['faithfulness'] or 0:.2f}   "
+            f"coverage: {m['coverage'] or 0:.2f}   judge errors: {m['judge_errors']}/{meta['n']}"
+        )
+        for r in worst_cases(report["cases"]):
+            j = r["judge"]
+            print(
+                f"    worst: {r['id']} faith {j['faithfulness']} cov {j['coverage']}: {j['issues']}"
+            )
+    t = meta["tokens"]
+    print(
+        f"  tokens: {t['total']} (summaries {t['summaries']}, judge {t['judge']})   "
+        f"wall time: {meta['wall_time_s']} s"
     )
 
 
@@ -305,15 +387,25 @@ def main() -> int:
             "anthropic",
         ],
     )
-    ap.add_argument("--model", default=None, help="defaults to DEFAULT_MODEL")
-    ap.add_argument("--gate", action="store_true")
-
+    ap.add_argument("--model", default=None, help="summarizer model; defaults to DEFAULT_MODEL")
+    ap.add_argument(
+        "--judge-model",
+        default=None,
+        help="defaults to gemini-3.5-flash-lite for gemini-3.8-flash, otherwise the summarizer model",
+    )
+    ap.add_argument(
+        "--prompt-version", default=None, help="e.g. summarize_v2; defaults to settings"
+    )
     ap.add_argument(
         "--rpm",
         type=float,
         default=None,
         help="max calls per minute per model (default 8 for real providers, 0 = unlimited for mock)",
     )
+    ap.add_argument(
+        "--out", type=Path, default=None, help="defaults to results/last_<provider>.json"
+    )
+    ap.add_argument("--gate", action="store_true")
     args = ap.parse_args()
 
     os.environ["LLM_PROVIDER"] = args.provider
@@ -321,49 +413,57 @@ def main() -> int:
     from app.llm import get_provider
 
     provider = get_provider()
-    args.model = args.model or get_settings().default_model
+    model = args.model or get_settings().default_model
+    use_judge = args.provider != "mock"
+    judge_model = (args.judge_model or default_judge_model(model)) if use_judge else None
     rpm = args.rpm if args.rpm is not None else (0 if args.provider == "mock" else DEFAULT_RPM)
     pacer = Pacer(rpm)
 
-    def call(model: str, fn):
-        return call_with_backoff(fn, model=model, pacer=pacer)
+    def call(m: str, fn):
+        return call_with_backoff(fn, model=m, pacer=pacer)
 
-    prompt = load_prompt()
+    prompt = load_prompt(args.prompt_version)
     th = yaml.safe_load((HERE / "thresholds.yaml").read_text())
     cases = load_cases()
+    t0 = time.monotonic()
     rows = []
     for i, c in enumerate(cases, 1):
         row = evaluate_case(
             c,
             provider=provider,
             prompt=prompt,
-            model=args.model,
-            use_judge=args.provider != "mock",
+            model=model,
+            use_judge=use_judge,
+            judge_model=judge_model,
             call=call,
         )
         print(f"  [{i}/{len(cases)}] {progress_line(row)}", flush=True)
         rows.append(row)
 
-    n = len(rows)
-    done = [r for r in rows if "error" not in r]
-    avg_hit = sum(r["hit_rate"] for r in done) / max(1, len(done))
-    max_len = max((r["length_ratio"] for r in done), default=0.0)
-    leaks = [r["id"] for r in done if r["leaks"]]
-    print(
-        f"summarization eval ({args.provider}, prompt {prompt.version}@{prompt.content_hash}, n={n})"
+    report = build_report(
+        rows,
+        provider=args.provider,
+        prompt=prompt,
+        model=model,
+        judge_model=judge_model,
+        rpm=rpm,
+        wall_time_s=time.monotonic() - t0,
     )
-    print(
-        f"  key-point hit rate : {avg_hit:.2f}   length ratio max: {max_len:.2f}   leaks: {leaks}"
+    print_report(report)
+    m = report["meta"]["means"]
+    ok = (
+        (m["key_point_hit_rate"] or 0) >= th["min_key_point_hit_rate"]
+        and (m["length_ratio_max"] or 0) <= th["max_length_ratio"]
+        and not m["leaked_cases"]
     )
-    ok = avg_hit >= th["min_key_point_hit_rate"] and max_len <= th["max_length_ratio"] and not leaks
-    if args.provider == "mock":
-        ok = (
-            ok and len(done) == n
-        )  # with the mock nothing should fail; with a model it is a judge error
-    if args.provider != "mock":
-        ok = ok and judge_gate(rows, th)
-    (HERE / "results").mkdir(exist_ok=True)
-    (HERE / "results" / f"last_{args.provider}.json").write_text(json.dumps(rows, indent=2))
+    if use_judge:
+        ok = ok and judge_gate(m, th)
+    else:
+        ok = ok and m["case_errors"] == 0  # with the mock nothing should fail
+    out = args.out or HERE / "results" / f"last_{args.provider}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2) + "\n")
+    print(f"  wrote {out}")
     if args.gate:
         print(f"gate: {'PASS' if ok else 'FAIL'}")
         return 0 if ok else 1
