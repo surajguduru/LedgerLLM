@@ -321,6 +321,20 @@ def test_both_models_failing_returns_502_and_bills_nothing(client, api_key, monk
     assert _ledger_rows() == [] and _budget() == (0, 0)
 
 
+def test_metrics_endpoint_exposes_the_fallback_counter(client, api_key, monkeypatch, env):
+    chain, _, _ = _chain(lambda r: httpx.Response(429, json={}))
+    _serve(monkeypatch, env, chain)
+    assert summarize(client, api_key).status_code == 200
+    body = client.get("/metrics").text
+    line = f'ledgerllm_provider_fallbacks_total{{from_model="{PRIMARY}",to_model="{SECONDARY}"}}'
+    assert line in body
+
+
+def test_groq_fallback_model_has_a_list_price():
+    # 1M input + 1M output tokens at $0.05 + $0.08 per MTok.
+    assert compute_cost_microusd("llama-3.1-8b-instant", 1_000_000, 1_000_000) == 130_000
+
+
 def test_without_fallback_settings_the_pipeline_is_unchanged(client, api_key, spy_reserve):
     r = summarize(client, api_key)
     assert r.status_code == 200

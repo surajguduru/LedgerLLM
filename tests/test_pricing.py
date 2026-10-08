@@ -20,7 +20,7 @@ def test_estimate_is_an_upper_bound_of_actual():
 
 
 def test_price_table_is_versioned():
-    assert load_prices().version == "2026-10-04"
+    assert load_prices().version == "2026-10-08"
 
 
 def test_usd_roundtrip():
