@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     prompts_dir: Path = ROOT / "prompts"
     summarize_prompt_version: str = "summarize_v1"
 
+    # Exact-match response cache; per-plan TTL in plans.yaml. False switches it off everywhere.
+    response_cache_enabled: bool = True
+
     # Guardrails: enforce | shadow | off
     guardrails_mode: str = "enforce"
 

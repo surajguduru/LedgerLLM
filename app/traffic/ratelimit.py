@@ -18,12 +18,11 @@ import time
 from dataclasses import dataclass
 
 from sqlalchemy import delete
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from app.models import RateLimitWindow
 from app.plans import Plan
+from app.traffic import dialect_insert
 
 WINDOW_SECONDS = 60
 PRUNE_AFTER_SECONDS = 180
@@ -50,9 +49,8 @@ class RateLimitResult:
 
 
 def _increment(db: Session, key_id: str, window_start: int) -> int:
-    insert = pg_insert if db.get_bind().dialect.name == "postgresql" else sqlite_insert
     stmt = (
-        insert(RateLimitWindow)
+        dialect_insert(db)(RateLimitWindow)
         .values(key_id=key_id, window_start=window_start, count=1)
         .on_conflict_do_update(
             index_elements=[RateLimitWindow.key_id, RateLimitWindow.window_start],

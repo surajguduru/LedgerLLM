@@ -37,8 +37,9 @@ from app.guardrails.input import classify_input
 from app.guardrails.output import moderate_output
 from app.guardrails.types import PASS, GuardrailVerdict
 from app.llm import ProviderError, estimate_tokens, get_provider
+from app.models import BudgetPeriod
 from app.observability import metrics
-from app.plans import microusd_to_usd
+from app.plans import load_plans, microusd_to_usd
 from app.quality.online_judge import maybe_sample
 from app.schemas import (
     BudgetInfo,
@@ -173,15 +174,19 @@ def summarize(
     auth: AuthContext = Depends(get_auth_context),
     settings: Settings = Depends(get_settings),
     idempotency_key: str | None = Header(None, alias="Idempotency-Key", max_length=128),
+    cache_control: str | None = Header(None, alias="Cache-Control"),
 ):
     request_id: str = request.state.request_id
+    bypass_cache = "no-cache" in (cache_control or "").lower()
     t0 = perf_counter()
     elapsed = lambda: int((perf_counter() - t0) * 1000)  # noqa: E731
 
     # 2. idempotency replay / claim ------------------------------------------------------------
     request_hash = idempotency.hash_request(payload)
     if not idempotency_key:
-        return _pipeline(payload, request_id, response, db, auth, settings, None, request_hash, t0)
+        return _pipeline(
+            payload, request_id, response, db, auth, settings, None, request_hash, bypass_cache, t0
+        )
     existing = idempotency.lookup(db, auth.tenant.id, idempotency_key)
     if existing is not None and existing.request_hash != request_hash:
         raise _fail(
@@ -216,7 +221,16 @@ def summarize(
         )
     try:
         return _pipeline(
-            payload, request_id, response, db, auth, settings, idempotency_key, request_hash, t0
+            payload,
+            request_id,
+            response,
+            db,
+            auth,
+            settings,
+            idempotency_key,
+            request_hash,
+            bypass_cache,
+            t0,
         )
     except BaseException:
         db.rollback()
@@ -233,6 +247,7 @@ def _pipeline(
     settings: Settings,
     idempotency_key: str | None,
     request_hash: str,
+    bypass_cache: bool,
     t0: float,
 ):
     """Stages 3-10. Runs at most once per idempotency key at a time (see `summarize`)."""
@@ -297,7 +312,7 @@ def _pipeline(
     if truncated:
         page.text = page.text[: plan.max_input_chars]
 
-    # 4½. response cache (owner: Suraj) — a hit costs nothing and skips the budget entirely
+    # 4½. response cache (owner: Suraj) — a hit costs nothing and skips the budget entirely (D16)
     prompt = load_prompt(settings.summarize_prompt_version)
     ckey = cache.cache_key(
         tenant_id=tenant.id,
@@ -308,8 +323,26 @@ def _pipeline(
         instructions=payload.instructions,
         text=page.text,
     )
-    cached = cache.lookup(db, tenant.id, ckey)
+    use_cache = settings.response_cache_enabled and plan.cache_ttl_s > 0
+    cached = None
+    if use_cache and bypass_cache:
+        metrics.CACHE.labels("bypass").inc()
+    elif use_cache:
+        cached = cache.lookup(db, tenant.id, ckey)
+        metrics.CACHE.labels("hit" if cached is not None else "miss").inc()
     if cached is not None:
+        period = budget.current_period()
+        limit = budget.limit_for(tenant, plan)
+        bp = db.get(BudgetPeriod, (tenant.id, period))
+        spent = bp.spent_microusd if bp else 0
+        committed = spent + (bp.reserved_microusd if bp else 0)
+        warning = committed >= limit * load_plans().soft_warning_fraction
+        response.headers.update(
+            {
+                "X-Budget-Limit-USD": f"{microusd_to_usd(limit):.6f}",
+                "X-Budget-Spent-USD": f"{microusd_to_usd(spent):.6f}",
+            }
+        )
         body = SummarizeResponse(
             request_id=request_id,
             summary=cached.text,
@@ -327,13 +360,28 @@ def _pipeline(
                 cached=True,
             ),
             budget=BudgetInfo(
-                period=budget.current_period(),
-                limit_usd=microusd_to_usd(budget.limit_for(tenant, plan)),
-                spent_usd=0.0,
-                remaining_usd=0.0,
-                warning=False,
+                period=period,
+                limit_usd=microusd_to_usd(limit),
+                spent_usd=microusd_to_usd(spent),
+                remaining_usd=microusd_to_usd(max(0, limit - spent)),
+                warning=warning,
             ),
             guardrails=GuardrailsInfo(mode=settings.guardrails_mode, input={}, output={}),
+        )
+        ledger.book(
+            db,
+            tenant_id=tenant.id,
+            key_id=key.id,
+            request_id=request_id,
+            purpose="completion",
+            model=cached.model,
+            input_tokens=0,
+            output_tokens=0,
+            cost_microusd=0,
+            price_version=load_prices().version,
+            prompt_version=cached.prompt_version,
+            latency_ms=0,
+            status="cached",
         )
         write_request_log(
             db,
@@ -348,6 +396,15 @@ def _pipeline(
             raw_output=cached.text,
             guardrails={"cached": True},
         )
+        if idempotency_key:
+            idempotency.store(
+                db,
+                tenant_id=tenant.id,
+                key=idempotency_key,
+                request_hash=request_hash,
+                status_code=200,
+                response_json=body.model_dump_json(),
+            )
         db.commit()
         return body
 
@@ -545,7 +602,8 @@ def _pipeline(
         raw_output=result.text,
         guardrails={"input": verdict_in.to_dict(), "output": verdict_out.to_dict()},
     )
-    if not withheld:
+    if use_cache and not (withheld or verdict_in.blocked or verdict_out.blocked):
+        # anything a guardrail flagged, even in shadow mode, is never served again from cache
         cache.store(
             db,
             tenant.id,
@@ -557,7 +615,9 @@ def _pipeline(
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
             ),
+            ttl_s=plan.cache_ttl_s,
         )
+    if not withheld:
         maybe_sample(
             request_id=request_id,
             tenant_id=tenant.id,

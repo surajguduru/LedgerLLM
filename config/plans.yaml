@@ -7,14 +7,17 @@ plans:
     rpm: 5
     monthly_budget_usd: 0.50
     max_input_chars: 20000
+    cache_ttl_s: 3600        # identical request served from cache for 1 h; 0 = off
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, mock]
   pro:
     rpm: 60
     monthly_budget_usd: 10.00
     max_input_chars: 60000
+    cache_ttl_s: 86400
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, mock]
   enterprise:
     rpm: 600
     monthly_budget_usd: 100.00
     max_input_chars: 120000
+    cache_ttl_s: 86400
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, claude-haiku-4-5, claude-sonnet-5-5, claude-opus-5-5, mock]

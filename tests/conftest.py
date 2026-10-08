@@ -7,6 +7,8 @@ os.environ["LLM_PROVIDER"] = "mock"
 os.environ["ADMIN_TOKEN"] = "test-admin"
 os.environ["APP_ENV"] = "test"
 os.environ["GUARDRAILS_MODE"] = "enforce"
+# Most tests repeat one identical request on purpose; tests/test_cache.py switches the cache back on.
+os.environ["RESPONSE_CACHE_ENABLED"] = "false"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
