@@ -14,7 +14,7 @@ router = APIRouter(tags=["portal"], include_in_schema=False)
 CHART_JS = "https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"
 
 CSS = """
-:root{--bg:#f5f6fa;--surface:#fff;--ink:#14161f;--muted:#6b7080;--line:#e6e8ef;--accent:#4f46e5;
+:root{color-scheme:light dark;--bg:#f5f6fa;--surface:#fff;--ink:#14161f;--muted:#6b7080;--line:#e6e8ef;--accent:#4f46e5;
 --accent-ink:#fff;--accent-soft:#eef0ff;--ok:#12805c;--ok-soft:#e7f6ef;--warn:#b54708;--warn-soft:#fff4e5;
 --bad:#c4320a;--bad-soft:#fdeceb;--shadow:0 1px 2px rgba(16,24,40,.04),0 4px 16px rgba(16,24,40,.06)}
 @media (prefers-color-scheme:dark){:root{--bg:#0e1017;--surface:#161925;--ink:#e8eaf2;--muted:#9aa0b4;
@@ -77,6 +77,10 @@ font-size:.9rem;cursor:pointer;transition:background .15s,border-color .15s}
 input,select{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);
 border-radius:10px;padding:10px 12px;outline:none;transition:border-color .15s,box-shadow .15s}
 input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+select{appearance:none;-webkit-appearance:none;padding-right:38px;text-overflow:ellipsis;cursor:pointer;
+background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%238b90a3' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+background-repeat:no-repeat;background-position:right 14px center;background-size:12px}
+select option{background:var(--surface);color:var(--ink)}
 label{display:block;font-weight:500;font-size:.88rem;margin:14px 0 6px}
 .notice{border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;gap:10px;align-items:flex-start}
 .notice.warn{background:var(--warn-soft);color:var(--warn)} .notice.bad{background:var(--bad-soft);color:var(--bad)}
