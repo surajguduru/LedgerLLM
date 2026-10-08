@@ -57,6 +57,31 @@ class ApiKey(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class User(Base):
+    """A person who signs in to the tenant portal. One owner per tenant (self sign-up creates both)."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    email: Mapped[str] = mapped_column(String(254), nullable=False, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(200), nullable=False)  # scrypt, salted
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PortalSession(Base):
+    """Portal login session. The cookie carries a random token; only its sha256 is stored."""
+
+    __tablename__ = "portal_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256 of the cookie token
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class RateLimitWindow(Base):
     """Fixed-window counter per key. Owner: Suraj. Row = (key, minute bucket) -> count."""
 

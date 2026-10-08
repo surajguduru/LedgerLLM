@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.billing import budget
-from app.models import BudgetPeriod, Tenant, UsageLedger
+from app.models import ApiKey, BudgetPeriod, Tenant, UsageLedger
 from app.plans import Plan, load_plans, microusd_to_usd
 from app.schemas import UsageSummary
 
@@ -70,8 +70,10 @@ def _iso(ts: datetime) -> str:
     return (ts if ts.tzinfo else ts.replace(tzinfo=UTC)).astimezone(UTC).isoformat()
 
 
-def summarize_usage(db: Session, tenant: Tenant, plan: Plan) -> UsageSummary:
-    period = budget.current_period()
+def summarize_usage(
+    db: Session, tenant: Tenant, plan: Plan, period: str | None = None
+) -> UsageSummary:
+    period = period or budget.current_period()
     bp = db.get(BudgetPeriod, (tenant.id, period))
     limit = bp.hard_limit_microusd if bp else budget.limit_for(tenant, plan)
     spent = bp.spent_microusd if bp else 0
@@ -196,3 +198,61 @@ def statement_csv(db: Session, tenant: Tenant, period: str) -> str:
         ("TOTAL", "", "", "", "", "", "", total, f"{microusd_to_usd(total):.6f}", "", "", "", "")
     )
     return out.getvalue()
+
+
+def usage_by_key(db: Session, tenant: Tenant, period: str) -> list[dict]:
+    """Every key of the tenant (used or not) with its billed requests, tokens and cost this period.
+    Rows without a key (platform-paid judge calls) are excluded, like every other billed total."""
+    stats = {
+        key_id: (n, tin, tout, int(cost or 0))
+        for key_id, n, tin, tout, cost in db.execute(
+            select(
+                UsageLedger.key_id,
+                func.count(func.distinct(UsageLedger.request_id)),
+                func.coalesce(func.sum(UsageLedger.input_tokens), 0),
+                func.coalesce(func.sum(UsageLedger.output_tokens), 0),
+                func.sum(UsageLedger.cost_microusd),
+            )
+            .where(_in_period(tenant.id, period) & BILLED)
+            .group_by(UsageLedger.key_id)
+        )
+    }
+    out = []
+    for k in db.scalars(
+        select(ApiKey).where(ApiKey.tenant_id == tenant.id).order_by(ApiKey.created_at)
+    ):
+        n, tin, tout, cost = stats.get(k.id, (0, 0, 0, 0))
+        out.append(
+            {
+                "key_id": k.id,
+                "name": k.name,
+                "key_prefix": k.key_prefix,
+                "created_at": _iso(k.created_at),
+                "last_used_at": _iso(k.last_used_at) if k.last_used_at else None,
+                "revoked_at": _iso(k.revoked_at) if k.revoked_at else None,
+                "requests": int(n),
+                "input_tokens": int(tin),
+                "output_tokens": int(tout),
+                "cost_usd": microusd_to_usd(cost),
+            }
+        )
+    return out
+
+
+def daily_by_key(db: Session, tenant: Tenant, period: str) -> list[dict]:
+    """[{date, key_id, requests, cost_usd}] for the period, oldest first (billed rows only)."""
+    day = _utc_day(db)
+    return [
+        {"date": str(d), "key_id": key_id, "requests": n, "cost_usd": microusd_to_usd(int(c or 0))}
+        for d, key_id, n, c in db.execute(
+            select(
+                day,
+                UsageLedger.key_id,
+                func.count(func.distinct(UsageLedger.request_id)),
+                func.sum(UsageLedger.cost_microusd),
+            )
+            .where(_in_period(tenant.id, period) & BILLED)
+            .group_by(day, UsageLedger.key_id)
+            .order_by(day)
+        )
+    ]

@@ -37,6 +37,10 @@ UPSTREAM_ERROR = "request.upstream_error"
 GUARDRAIL_SHADOW = "guardrail.shadow_block"
 IDEMPOTENCY_CONFLICT = "request.idempotency_conflict"
 FEEDBACK = "request.feedback"
+USER_SIGNUP = "user.signup"
+USER_LOGIN = "user.login"
+USER_LOGIN_FAILED = "user.login_failed"
+USER_LOGOUT = "user.logout"
 
 
 def audit(
