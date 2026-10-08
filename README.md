@@ -148,7 +148,7 @@ Errors always look like `{"error": {"code": "…", "message": "…", "request_id
 |---|---|
 | `config/plans.yaml` | requests/min, monthly budget, input size limit and allowed models per plan; soft-warning threshold |
 | `config/prices.yaml` | list $/MTok per model with a **version**; every ledger row records which version priced it. Tenants are billed at list price even when the platform runs on a free-tier key |
-| `prompts/summarize_v1.yaml` | system prompt + user template; the document is wrapped as data; a content hash is recorded per request |
+| `prompts/summarize_v1.yaml`, `summarize_v2.yaml` | system prompt + user template; the document is wrapped as data; a content hash is recorded per request. v1 is the default; v2 is available (eval: no judge difference beyond noise, longer output; see `docs/MEASUREMENTS.md`) |
 
 Rolling out a new prompt = add `summarize_v2.yaml` and set `SUMMARIZE_PROMPT_VERSION`. Rolling back = set it back.
 
@@ -262,6 +262,15 @@ Judge cost at list price: ≈ $0.0027 per sample on a 3k-token document, so ≈ 
 
 GitHub Actions runs lint, the test suite on SQLite **and** Postgres, and both eval gates on every pull request.
 The LLM-judge run executes only when a PR touches `prompts/` or the feature code, to stay inside free-tier rate limits.
+
+**Prompt rollout.**
+1. Add a new file (`prompts/summarize_v2.yaml`); the old version stays loadable, and the content hash changes.
+2. Put the eval diff in the PR: the full 30-case run for both versions with the same judge
+   (`--prompt-version summarize_v1` / `summarize_v2`, separate `--out` files), plus the CI subset gate on the PR.
+3. Flip the setting (`summarize_prompt_version` in `app/config.py`, or `SUMMARIZE_PROMPT_VERSION` per deployment)
+   only when the new version is at least as good on both judge metrics and leaks nothing.
+4. Roll back with `SUMMARIZE_PROMPT_VERSION=summarize_v1`, no code change needed. Cached responses are keyed
+   by the prompt hash, so a switch either way never serves a summary made with the other prompt.
 
 ## Load test
 

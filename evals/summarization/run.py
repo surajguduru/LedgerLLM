@@ -15,7 +15,7 @@ says when it sends one. thresholds.yaml has a `mock` section (the mock cannot su
 plumbing only) and a `model` section (the quality gate). Results go to results/last_<provider>.json with run
 metadata (prompt version@hash, models, reasoning efforts, tokens, wall time, means;
 the means include summaries over the word limit and mean summary output tokens, which a prompt change moves). Committed: results/last_groq.json
-(the 30-case run) and results/last_gemini.json (the 3-case Gemini run; Gemini's free tier allows only 20 flash
+(the 30-case run of the default prompt), results/last_groq_v2.json (the same for summarize_v2) and results/last_gemini.json (the 3-case Gemini run; Gemini's free tier allows only 20 flash
 requests a day, so a 30-case run cannot finish there).
 calibration.jsonl + agreement.py measure how far the judge agrees with hand scores.
 

@@ -1,0 +1,520 @@
+{
+  "meta": {
+    "prompt": "summarize_v2@38f5e07def7b",
+    "provider": "groq",
+    "summarizer_model": "qwen/qwen3.8-27b",
+    "judge_model": "openai/gpt-oss-120b",
+    "reasoning_effort": {
+      "summarizer": null,
+      "judge": "low"
+    },
+    "timestamp_utc": "2026-10-08T09:56:16Z",
+    "n": 30,
+    "subset": null,
+    "rpm": 8,
+    "tpm": 7000,
+    "tokens": {
+      "summaries": 47280,
+      "judge": 53355,
+      "total": 100635
+    },
+    "wall_time_s": 1286.1,
+    "means": {
+      "key_point_hit_rate": 0.951,
+      "length_ratio_max": 1.217,
+      "leaked_cases": [],
+      "case_errors": 0,
+      "empty_summaries": 0,
+      "over_word_limit": 15,
+      "summary_output_tokens_mean": 162.2,
+      "faithfulness": 4.967,
+      "coverage": 4.033,
+      "judge_errors": 0,
+      "judge_error_rate": 0.0
+    }
+  },
+  "cases": [
+    {
+      "id": "sum-001",
+      "summary": "- LLM APIs often check spending limits against stale counters, allowing concurrent request bursts to cause tenant overspending.\n- A safer design atomically reserves the worst-case cost of each request before calling the model.\n- Requests are rejected if the reservation would exceed the limit, with the actual cost settled afterwards.\n- This pessimistic approach may refuse tenants near the limit even if the real cost would have fit.\n- Teams accept this trade-off because overspending causes billing incidents, whereas premature refusal is a manageable retry.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.7166666666666667,
+      "leaks": [],
+      "tokens": 612,
+      "output_tokens": 106,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 5,
+        "issues": [],
+        "judge_tokens": 709,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-002",
+      "summary": "- Indirect prompt injection occurs when attackers embed malicious instructions in content, such as web pages, that a model processes later.\n- Defenses operate in layers, including system prompts that treat fetched content as data, input classifiers, and output checks.\n- No single defensive layer is sufficient on its own to prevent these attacks.\n- Each defense layer introduces additional latency and a risk of false positives.\n- Teams measure catch rates and false-positive rates using red-team sets to tune thresholds per product.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.6916666666666667,
+      "leaks": [],
+      "tokens": 594,
+      "output_tokens": 102,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 5,
+        "issues": [],
+        "judge_tokens": 715,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-003",
+      "summary": "- Storing currency as floating-point numbers causes rounding drift, leading to discrepancies in totals and disagreements between systems.\n- Storing amounts as integers in the smallest unit, such as micro-dollars, ensures exact sums and atomic, comparable database increments.\n- Integer storage simplifies price tables, as tokens multiplied by dollars per million tokens directly yields a micro-dollar amount.\n- The primary cost is that every presentation layer must convert values back to dollars.\n- Very large totals require a 64-bit column to prevent overflow.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.6916666666666667,
+      "leaks": [],
+      "tokens": 598,
+      "output_tokens": 109,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 5,
+        "issues": [],
+        "judge_tokens": 683,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-004",
+      "summary": "- Ferrow replaced its Redis job queue with a Postgres table using `FOR UPDATE SKIP LOCKED` to eliminate lost and phantom jobs caused by non-atomic updates across two stores.\n- Enqueueing jobs within the same transaction as business writes ensures durability, while a five-minute lease on claimed jobs automatically recovers work from crashed workers.\n- Retries utilize exponential backoff capped at one hour, moving jobs to a dead-letter table after eight failed attempts for manual review.\n- Production load tests showed a throughput ceiling of 2,300 jobs per second, providing roughly sixteen times headroom over the current peak of 140 jobs per second.\n- The design requires aggressive autovacuum tuning and daily partitioning to manage table churn, though polling adds slight latency compared to blocking pops.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.05,
+      "leaks": [],
+      "tokens": 1393,
+      "output_tokens": 166,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1508,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-005",
+      "summary": "- Lumenfold reduced CI median time from 41 to 12 minutes by measuring bottlenecks and executing optimizations in order of impact.\n- Parallelizing lint and fixing dependency caching saved approximately nine minutes by eliminating serial waits and daily cache misses.\n- Timing-based test sharding across eight runners cut suite execution from 19 to 4 minutes, exposing and fixing hidden test coupling.\n- Reordering Docker layers and enabling BuildKit reduced image builds from 9 to 2 minutes, while path filters skip builds for documentation-only changes.\n- Quarantining flaky tests instead of retrying them lowered the rerun rate from 11% to under 2% and identified genuine bugs.\n- Permanent timing dashboards, soft test budgets, and quarterly shard reviews now prevent performance drift and assign clear ownership.",
+      "hit_rate": 0.8,
+      "length_ratio": 1.0333333333333334,
+      "leaks": [],
+      "tokens": 2471,
+      "output_tokens": 170,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 2752,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-006",
+      "summary": "- Parcelo sends HTTPS POST webhooks with JSON bodies and three headers, including a Parcelo-Signature computed via HMAC-SHA256.\n- Verify signatures using the raw request body, timestamp, and signing secret with constant-time comparison, rejecting events older than five minutes.\n- Acknowledge events with a 2xx status within 10 seconds; failures trigger retries with backoff for up to three days.\n- Handle duplicate and out-of-order deliveries by ensuring idempotency using event IDs and created timestamps.\n- Endpoints disabled after three days of failure can be re-enabled, with missed events replayable for the last 30 days.\n- Deliveries originate from fixed IP addresses, but signature verification remains mandatory as IPs can change.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.9166666666666666,
+      "leaks": [],
+      "tokens": 1389,
+      "output_tokens": 158,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1689,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-007",
+      "summary": "- Accepts UTF-8 CSV files up to 50 MB (uncompressed) with headers matching field API names.\n- Each job supports a maximum of 200,000 rows, with no limit on total jobs over time.\n- Workspaces allow three concurrent jobs; additional submissions queue automatically and cancel after 24 hours.\n- Failed rows are skipped and detailed in a downloadable error report; jobs abort if over 10% of rows fail.\n- Import jobs bypass the standard 100 requests per 10 seconds rate limit, though job creation and polling endpoints remain subject to it.\n- Use the match_on parameter to update existing records and prevent duplicates.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.8583333333333333,
+      "leaks": [],
+      "tokens": 984,
+      "output_tokens": 146,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1271,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-008",
+      "summary": "- tessera 4.2.0 introduces parallel tile rendering, reducing build time from 6 minutes 10 seconds to 1 minute 40 seconds on an 8-core laptop.\n- A new --dry-run flag for the publish command lists file changes without executing them, and tessera inspect now supports WGS84 or Web Mercator coordinates.\n- Default PNG compression level changed to 6, making files 4 percent larger but encoding roughly twice as fast.\n- Python 3.9 support is dropped, requiring Python 3.10 or newer; users on 3.9 can remain on the 4.1 series for security fixes until March.\n- Fixes include a memory leak in watch mode, prevention of re-uploading unchanged files across regions, and a crash fix for empty layer lists.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.975,
+      "leaks": [],
+      "tokens": 1032,
+      "output_tokens": 172,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1366,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-009",
+      "summary": "- Quillstore 3.0 replaces the B-tree storage engine with a log-structured merge tree, improving sustained random-write throughput by 3.4 times and reducing disk usage by 25-40 percent.\n- New features include per-key time-to-live (TTL) expiry, prefix bloom filters for faster range scans, and online backups that do not pause writes.\n- Breaking changes include an incompatible on-disk format requiring migration, removal of the deprecated v1 HTTP API, and a default port change from 6380 to 7480.\n- Upgrading requires running a consistency check on version 2.9.4, taking a backup, and using the quill-migrate tool, which creates a new 3.0 directory without modifying the source.\n- Official client libraries require updates to support new features, and monitoring dashboards must be updated to reflect new metrics for the merge tree engine.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.075,
+      "leaks": [],
+      "tokens": 2732,
+      "output_tokens": 195,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 3,
+        "issues": [],
+        "judge_tokens": 2774,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-010",
+      "summary": "- The Harlow Bridge council voted 7 to 4 to approve a 1.8-kilometre permanent flood barrier along the Wend riverside, ending a two-year dispute.\n- The 38 million pound project, funded partly by a national grant and a business levy, will protect 1,100 homes and 240 businesses from 100-year flood events.\n- The final design incorporates glass panels and removable steel gates to preserve river views, replacing an earlier solid concrete wall that faced significant public opposition.\n- Construction is scheduled to begin next spring following a tender process opening in November, with completion expected in 2029.\n- While the council will hold a drop-in session for residents to view final plans, some business owners remain concerned about the impact of an 18-month construction period.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.0416666666666667,
+      "leaks": [],
+      "tokens": 1290,
+      "output_tokens": 175,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1454,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-011",
+      "summary": "- Northlink Air pilots began a 48-hour strike at midnight Thursday, cancelling 310 flights and affecting 26,000 passengers across 22 airports.\n- The dispute centers on rostering and rest periods, with the union demanding two consecutive rest days per week and 72 hours' notice for changes.\n- Northlink's COO Marianne Holt stated the airline's rosters comply with safety rules and that the union's demands would require hiring 30 additional pilots.\n- The union rejected the airline's offer, arguing it still allows rest day changes with only 24 hours' notice, and warned of further strikes if no agreement is reached.\n- Affected passengers can rebook free of charge within 30 days or request a full refund, though the airline claims the strike is an extraordinary circumstance.",
+      "hit_rate": 0.75,
+      "length_ratio": 1.0416666666666667,
+      "leaks": [],
+      "tokens": 996,
+      "output_tokens": 176,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1146,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-012",
+      "summary": "- Calloway Foods Q2 revenue rose 6% to 1.42 billion euros, beating consensus, while operating profit of 71 million euros exceeded estimates.\n- Price cuts on own-label products drove a 3.3-point volume contribution, lifting market share to 14.6 percent and gross margin to 31.8 percent.\n- The rating was upgraded from hold to accumulate, with the price target raised from 24 to 27 euros, reflecting improved profitability.\n- Full-year operating profit guidance was increased to 270-285 million euros, though the online grocery division remains loss-making with a 12 million euro quarterly loss.\n- Net debt excluding leases fell to 610 million euros, while key risks include potential price wars and the sustainability of recent volume gains.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.9666666666666667,
+      "leaks": [],
+      "tokens": 1391,
+      "output_tokens": 175,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1689,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-013",
+      "summary": "- Orrin Industrial's Q3 2026 revenue rose 4.7% to 2.184 billion, with adjusted EBITDA up 9.2% to 391 million and adjusted EPS increasing 11.8% to 1.71.\n- The Automation segment led growth at 12.3%, driven by strong warehouse demand, while Fluid Systems revenue fell 6.1% due to delayed chemical industry projects.\n- Free cash flow increased 24.6% to 162 million, and net debt to adjusted EBITDA improved to 1.38 times, aided by a 455 million cash acquisition of Pellham Sensors.\n- Full-year 2026 guidance was narrowed, with organic revenue growth now expected at 2.5 to 3.5 percent and adjusted EBITDA margin at 17.6 to 17.9 percent.\n- Restructuring charges totaled 21 million in the quarter, primarily for the Dunmore valve plant closure, with cumulative savings reaching 46 million against a 70 million target.",
+      "hit_rate": 0.8333333333333334,
+      "length_ratio": 1.1083333333333334,
+      "leaks": [],
+      "tokens": 3365,
+      "output_tokens": 241,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 3385,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-014",
+      "summary": "- Brightwell Health's policy mandates deleting or anonymizing personal data within 60 days of its retention period ending, with quarterly deletion reviews by asset owners.\n- Key retention periods include eight years for patient records, ten years for clinical incidents, two years for appointment data, and 30 days for CCTV footage.\n- Electronic data must be unrecoverably deleted, while paper records require cross-cut shredding or certified confidential waste disposal.\n- Backups are overwritten on a 35-day rolling cycle and must not be restored to recover data past its retention period.\n- Legal holds suspend deletion for litigation or investigations, requiring asset owner confirmation within five working days.\n- The Data Protection Officer maintains the retention schedule, approves exceptions, and audits compliance annually.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.0166666666666666,
+      "leaks": [],
+      "tokens": 2459,
+      "output_tokens": 157,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 3,
+        "issues": [],
+        "judge_tokens": 2622,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-015",
+      "summary": "- Ordinance 2026-14 mandates registration for all short-term rentals (rented fewer than 30 consecutive nights) before advertising, requiring proof of ownership, a local contact, and $1,000,000 in liability insurance.\n- A $150 annual registration fee applies, and the registration number must appear in every advertisement or listing.\n- Owner-occupied primary residences have no annual rental limit, while non-primary residences are capped at 120 nights per year, with a maximum of two registrations per person.\n- Platforms must refuse bookings for unregistered listings and submit monthly reports of nights booked to the City.\n- Penalties include $500 per day for unregistered rentals, $1,000 per night for exceeding limits, and potential revocation after three verified complaints within twelve months.\n- The ordinance takes effect 90 days after its adoption on June 2, 2026, by a 5-2 vote.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.125,
+      "leaks": [],
+      "tokens": 1179,
+      "output_tokens": 211,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 5,
+        "issues": [],
+        "judge_tokens": 1449,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-016",
+      "summary": "- Calder's city council approved a six-month pilot closing Fenwick Street to through traffic on Sundays only, rather than a permanent downtown car ban.\n- The closure affects a 450-metre section from 10 a.m. to 6 p.m., with exceptions for delivery vehicles, residents, blue badge holders, and emergency services.\n- The street will host a Sunday market with up to forty stalls, supported by the downtown business association to boost weak Sunday footfall.\n- The council will review pedestrian counts, air quality data, card spending, and resident surveys before deciding whether to continue or expand the scheme.\n- The trial costs an estimated 85,000 pounds, with a results report scheduled for the transport committee next spring.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.9666666666666667,
+      "leaks": [],
+      "tokens": 1271,
+      "output_tokens": 157,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1420,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-017",
+      "summary": "- Apple Pay launches on both storefronts on November 4, with internal dogfooding starting October 28; a decision point on October 25 addresses potential delays in the outlet merchant identity.\n- Vendor A is selected for address autocomplete due to superior accuracy, with contract procurement initiated now and integration scheduled for December.\n- A fraud rule incident blocking 212 legitimate orders led to new protocols: seven-day shadow mode testing and per-country block-rate alerts, with a postmortem due Friday.\n- A load test targeting 3,000 checkouts per minute will run in the week of November 9, supported by a payment processor stub and tax rate caching if needed.\n- Code freeze occurs from November 20 to 30, following full regression testing on November 18 and 19.",
+      "hit_rate": 0.8,
+      "length_ratio": 1.0416666666666667,
+      "leaks": [],
+      "tokens": 2696,
+      "output_tokens": 173,
+      "judge": {
+        "faithfulness": 4,
+        "coverage": 5,
+        "issues": [
+          "Summary states integration scheduled for December, but source only says integration after Black Friday without specifying December"
+        ],
+        "judge_tokens": 2827,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-018",
+      "summary": "- Margit Solberg coordinates the Hollis Street repair caf\u00e9, a free monthly event in a church hall where volunteers help visitors fix items like appliances and clothing.\n- The initiative began in 2019 and now has about thirty volunteers, typically fifteen attending each session.\n- Volunteers successfully repair approximately 70 percent of items, while another 10 percent are diagnosed for specific part orders.\n- Repair challenges often stem from manufacturer designs, such as glued batteries and unavailable spare parts.\n- Safety is ensured through qualified electrician testing and liability waivers, with no incidents reported in six years.\n- Solberg advocates for a right to repair law requiring manufacturers to provide spare parts and manuals for small appliances.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.975,
+      "leaks": [],
+      "tokens": 1349,
+      "output_tokens": 147,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 3,
+        "issues": [],
+        "judge_tokens": 1640,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-019",
+      "summary": "- A configuration change lowering database timeouts caused a 3-hour payments API outage, resulting in 184,000 failed payment attempts across 9,300 merchants.\n- The incident was exacerbated by a client retry storm and a 65-minute recovery delay because the rollback tools depended on the same overloaded database.\n- No data was lost or exposed, and no double charges occurred due to idempotency keys, though an estimated 30,000 to 50,000 payments were lost entirely.\n- Recovery was achieved by shedding 70 percent of traffic at the load balancer, allowing the database to recover before the timeout was rolled back.\n- Action items include staged configuration rollouts, retry budgets with backoff, and moving configuration service dependencies off the payments database cluster.",
+      "hit_rate": 0.6,
+      "length_ratio": 0.9916666666666667,
+      "leaks": [],
+      "tokens": 2700,
+      "output_tokens": 172,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 3,
+        "issues": [],
+        "judge_tokens": 2995,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-020",
+      "summary": "- A routine deploy locked the 140-million-row orders table for 26 minutes by creating an index without CONCURRENTLY, causing 4,700 checkout failures.\n- The team chose to wait for the index build to finish rather than cancel the migration, despite the risk of blocking traffic.\n- The incident occurred because the engineer was unfamiliar with Postgres locking behavior, and staging tests failed to detect the issue due to small data size.\n- New changes include a CI linter to reject blocking index creation, separate off-hours deploys for large tables, and an updated incident guide to prioritize cancellation.\n- An audit found two similar unalerted migrations in the past year, highlighting gaps in off-peak monitoring.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.95,
+      "leaks": [],
+      "tokens": 1334,
+      "output_tokens": 152,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1457,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-021",
+      "summary": "- Rotate SSH keys by keeping both old and new keys valid until the new one is proven to prevent lockout.\n- Generate a new ed25519 key with a passphrase and save it under a distinct filename.\n- Add the new public key to server authorized_keys files before removing the old one.\n- Test the new key in a second session using IdentitiesOnly=yes to ensure the old key is not used.\n- Update all dependent tools and configurations, then remove the old key from servers and your local machine.\n- For multiple servers, use configuration management tools and track rotation status to avoid missing any hosts.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.8833333333333333,
+      "leaks": [],
+      "tokens": 998,
+      "output_tokens": 130,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 5,
+        "issues": [],
+        "judge_tokens": 1260,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-022",
+      "summary": "- This guide details setting up encrypted, off-site backups for a small office using restic and S3-compatible storage, requiring about two hours for initial setup.\n- Key steps include creating a versioned bucket, installing restic, configuring credentials in protected files, and scheduling nightly automated backups via systemd timers.\n- A retention policy using `restic forget --prune` maintains a year of history, while health checks and monthly restore tests ensure backup reliability and data integrity.\n- Ransomware protection relies on bucket versioning, append-only REST servers, and quarterly offline copies to prevent attackers from deleting or encrypting backup data.\n- Common mistakes include storing the only repository password on the server, backing up open database files, and failing to test restores or back up individual laptops.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.0333333333333334,
+      "leaks": [],
+      "tokens": 2636,
+      "output_tokens": 159,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 2727,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-023",
+      "summary": "- A randomised trial of 214 healthy older adults found that a scheduled 30-minute afternoon nap improved next-day word-list recall by 1.2 words compared to a quiet-rest control.\n- The 90-minute nap group showed no significant difference in recall from the control group, with actual nap duration averaging 71 minutes.\n- Exploratory analysis indicated that naps longer than 60 minutes provided no cognitive benefit and were associated with 18 minutes less night-time sleep.\n- The study aimed to separate napping effects from underlying health conditions by controlling nap duration and objectively measuring night-time sleep via actigraphy.\n- Researchers concluded that while short naps offer a modest memory benefit, the effect is small and requires replication in more diverse populations over longer periods.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.0166666666666666,
+      "leaks": [],
+      "tokens": 1369,
+      "output_tokens": 164,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1555,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-024",
+      "summary": "- The new HopTrace benchmark, containing 6,200 multi-hop questions, reveals that retrieval improves single-hop accuracy by 31 to 44 points but only 6 to 15 points for three-hop questions.\n- Small models (1 to 13 billion parameters) primarily fail by ignoring retrieved passages that contradict their memorized prior beliefs in 27 to 41 percent of counterfactual cases.\n- Under realistic retrieval, the probability of finding all necessary passages drops from 88 percent for single-hop to 52 percent for three-hop questions.\n- Query decomposition recovers part of the performance gap, raising three-hop accuracy by 9 points on average, but at approximately three times the inference cost.\n- The study concludes that reading and reasoning failures, rather than retrieval errors, are the main bottleneck for small models on complex multi-hop tasks.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.075,
+      "leaks": [],
+      "tokens": 2500,
+      "output_tokens": 183,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 2848,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-025",
+      "summary": "- During a 52-minute API outage, the status page was unavailable for the first 40 minutes because it shared infrastructure with the API.\n- Customers could not view incident updates, leading to approximately 900 support messages asking if the company was aware of the issue.\n- The status page has been migrated to an external provider on separate infrastructure to prevent shared failure modes.\n- Additional communication channels, including a support Twitter account and an email list, are now used for incident updates.\n- A quarterly drill will simulate total infrastructure outages to ensure on-call engineers can publish updates within ten minutes.\n- The incident runbook now mandates posting the first status update as step two, using a pre-written template.",
+      "hit_rate": 0.75,
+      "length_ratio": 1.0,
+      "leaks": [],
+      "tokens": 984,
+      "output_tokens": 149,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1479,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-026",
+      "summary": "- Notewell allows users to export all owned notebooks, notes, tags, comments, and attachments at any time, excluding notes shared by others.\n- Exports are available in Markdown (individual .md files per note) or JSON (single file with full metadata) formats, with attachments included as separate files.\n- Export processing times vary, taking under ten minutes for a few thousand notes or several hours for accounts with many attachments.\n- Users receive an email with a download link valid for seven days, which requires an active sign-in to the requesting account.\n- Attachments over 2 GB are exported via separate links, and users must export data before account deletion, as data is permanently removed within 30 days.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.975,
+      "leaks": [],
+      "tokens": 991,
+      "output_tokens": 150,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1209,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-027",
+      "summary": "- The Port of Kessel reopened on Sunday after a three-day dockworker dispute, ending a stoppage that left 140 container ships waiting and disrupted regional supply chains.\n- A provisional agreement mandates that every automated crane be supervised by a trained operator in a control room, with a ratio of one operator for no more than three cranes.\n- Kessel Port Holdings promised no permanent redundancies due to automation before 2031 and committed to funding retraining for crane drivers.\n- The union will vote on the deal over the next ten days, with work continuing normally during the period.\n- Clearing the backlog is expected to take two weeks, with port officials warning that delivery dates may slip by several days.\n- The regional chamber of commerce estimated losses at several million euros a day, while the union rejected calls to restrict the right to strike.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.2166666666666666,
+      "leaks": [],
+      "tokens": 1293,
+      "output_tokens": 179,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1456,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-028",
+      "summary": "- Brindle Outdoor's third-quarter sales fell 3 percent to 186 million pounds, with like-for-like sales down 4 percent.\n- Warm autumn weather reduced demand for winter items, causing an 11 percent drop in those categories, while summer equipment sales rose 9 percent.\n- Inventory stands at 142 million pounds, 12 percent higher than last year, prompting an 8 percent reduction in spring orders.\n- The board now expects full-year profit at the low end of guidance, close to 31 million pounds, due to weaker third-quarter performance.\n- Net cash remains positive, and the company maintains its dividend policy, with the next update scheduled for January.",
+      "hit_rate": 1.0,
+      "length_ratio": 0.875,
+      "leaks": [],
+      "tokens": 945,
+      "output_tokens": 147,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1287,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-029",
+      "summary": "- Invoice fraud, often via hacked supplier accounts, is the most common attack on finance teams, with losses usually unrecoverable.\n- Warning signs include requests to change bank details, create urgency, use slightly different email addresses, or bypass normal processes.\n- Do not reply to suspicious emails or click links; verify bank detail changes by phoning a known number from supplier records, not the email.\n- Report suspicious emails to the security team using the mail client's Report button, even if unsure, to ensure technical headers are analyzed.\n- If a payment was made to a new account, immediately contact the bank's fraud line and notify the finance director and security.\n- Legitimate bank detail changes require dual approval in the finance system, a 48-hour payment hold, and a confirmation letter to the supplier's registered address.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.1333333333333333,
+      "leaks": [],
+      "tokens": 1273,
+      "output_tokens": 171,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 4,
+        "issues": [],
+        "judge_tokens": 1388,
+        "judge_attempts": 1
+      }
+    },
+    {
+      "id": "sum-030",
+      "summary": "- Tenants in six cities renewed leases for 18% less floor space on average, with technology and professional services firms reducing space by 27% and 22% respectively.\n- Older buildings lost more tenants than newer, energy-efficient ones, where 84% of tenants renewed in the same building compared to 61% in lower-rated buildings.\n- Landlords preferred offering incentives over cutting headline rents, resulting in only a 4% real rent decrease despite an 18% drop in leased space.\n- Firms with formal hybrid policies requiring two or fewer office days reduced space by 31%, compared to 9% for those requiring four or more days.\n- The study suggests a lasting fall in office demand concentrated in older buildings, impacting city tax revenue and highlighting conversion to housing as a potential solution.",
+      "hit_rate": 1.0,
+      "length_ratio": 1.075,
+      "leaks": [],
+      "tokens": 2456,
+      "output_tokens": 174,
+      "judge": {
+        "faithfulness": 5,
+        "coverage": 3,
+        "issues": [],
+        "judge_tokens": 2595,
+        "judge_attempts": 1
+      }
+    }
+  ]
+}
