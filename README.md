@@ -308,7 +308,9 @@ python loadtest/verify_quota.py        # prints "quota enforcement: HOLDS" if sp
 Measured values with their conditions. Raw log and trade-offs: [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md).
 Commands and the full load-test write-up: [`loadtest/README.md`](loadtest/README.md).
 
-All numbers below are on `main` @ `72a7ab3`, mock provider; the burst and load figures are on
+All numbers below were measured on `main` @ `72a7ab3` (6–8 Oct), mock provider; later merges changed the
+pipeline (single final transaction, per-tenant rate limit, rule-aware cache key) but not its hot path, so they
+are expected to hold — re-run `make loadtest` and `python loadtest/verify_quota.py` before quoting them. The burst and load figures are on
 **Postgres 16** in Docker, the overhead figure on SQLite. **The mock is priced
 identically to `gemini-3.8-flash` in `config/prices.yaml`, so dollar figures are real list-price
 arithmetic**; only output *length* is synthetic.
@@ -321,16 +323,16 @@ arithmetic**; only output *length* is synthetic.
 | Burst quota test: admitted / refused / ledger vs limit | **157 admitted · 8,650 refused (402) · $0.018765 booked of a $0.020000 limit · reserved back to $0** → `quota enforcement: HOLDS` | never exceed the limit ✅ | **Postgres 16**, 50 users on 50 keys of one tenant, 60 s, `MOCK_LATENCY_MS=800`. Postgres (not SQLite) so the requests genuinely race; 800 ms is the hostile case, since it is the window a naive check-then-call would lose. Measured overspend **$0.000000**. 4,195 × 429 came from a user class that trips the limiter on purpose |
 | Reservation pessimism | **6.2 %** of budget unspent ($0.001235 = 1.8× the average request) | — | same run. The measured cost of reserve-then-settle (D2): the reserve books worst-case output tokens and settles for less |
 | Cost per request at list price | **$0.002776** (3.2k-token document, bullets, `max_words=150`) | ≤ $0.004 ✅ | 3,192 input + ~102 output tokens. A real 150-word summary is ~200 output tokens → ≈ $0.0031, still inside target |
-| Guardrail classifier cost per 1,000 requests | ≈ **$0.015** (instructions) – **$0.07** (1.5k-token documents) | — | 12 % of eval cases in the uncertain band × Flash-Lite list price (Thrishal) |
-| Online judge cost per 1,000 requests | ≈ **$0.13** | — | 5 % sampled, 3k-token source, Gemini 3.8 Flash list price; billed to the platform, not tenants (D17) (Thrishal) |
+| Guardrail classifier cost per 1,000 requests | ≈ **$0.015** (instructions) – **$0.07** (1.5k-token documents) | — | 12 % of eval cases in the uncertain band × Flash-Lite list price |
+| Online judge cost per 1,000 requests | ≈ **$0.13** | — | 5 % sampled, 3k-token source, Gemini 3.8 Flash list price; billed to the platform, not tenants (D17) |
 | Metric cardinality | **171 series**, of which only **18** carry a `tenant` label → **6 per tenant** | — | 3 tenants, 1 model, measured with Prometheus `count()`. Extrapolates to ~27,000 series at 1,000 tenants × 3 models — `DESIGN.md` §5 limit #4. The 85 `http_*` series are mostly the cost of widening the latency histogram from 3 to 14 buckets, without which neither latency target is measurable |
 | End-to-end latency p50 / p99 (real model) | *pending* — needs a Gemini key | p50 ≤ 3 s, p99 ≤ 8 s | `latency_sample.py`, 30 paced requests at three sizes. Script verified against the mock |
-| Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 2 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` (Thrishal) |
+| Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 2 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` |
 | Red-team **held-out** set (20 reworded attacks, never used for tuning) | heuristics **5 %** before / 65 % after generic rules; cascade with every instruction classified **90 %** (old rules) / **100 %** (new) (new) | — | `evals/redteam/heldout.jsonl`; the set is now seen, a fresh one is needed for the next honest number |
-| Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %**; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier (Thrishal) |
-| Summarization faithfulness / coverage (LLM judge, 1–5) | `summarize_v1` **4.93 / 4.07**, hit rate 0.91 · `summarize_v2` **4.97 / 4.03**, hit rate 0.95 · **0 injection leaks** either way | ≥ 4.0 / ≥ 3.5 ✅ | 30-case Groq golden set, identical judge and rubric for both versions. v2 wins on faithfulness and key-point hit rate, v1 marginally on coverage, and v2 runs longer (15/30 over 120 words vs 7/30) at $0.00178 vs $0.00157 per request (Sai) |
+| Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %**; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier |
+| Summarization faithfulness / coverage (LLM judge, 1–5) | `summarize_v1` **4.93 / 4.07**, hit rate 0.91 · `summarize_v2` **4.97 / 4.03**, hit rate 0.95 · **0 injection leaks** either way | ≥ 4.0 / ≥ 3.5 ✅ | 30-case Groq golden set, identical judge and rubric for both versions. v2 wins on faithfulness and key-point hit rate, v1 marginally on coverage, and v2 runs longer (15/30 over 120 words vs 7/30) at $0.00178 vs $0.00157 per request |
 
-Traffic-control micro-benchmarks (Suraj): rate-limit check p50 747 µs / p99 1,404 µs on Postgres;
+Traffic-control micro-benchmarks: rate-limit check p50 747 µs / p99 1,404 µs on Postgres;
 fixed-window edge burst measured at exactly the 2.0× rpm bound D3 accepts; image 460 MB; local cold
 start 1.1 s.
 

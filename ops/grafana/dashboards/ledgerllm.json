@@ -2,18 +2,28 @@
   "uid": "ledgerllm",
   "title": "LedgerLLM",
   "description": "Operator view. Rows follow the monitoring categories in docs/DESIGN.md section 4: Operational, Cost, Input, Quality. Owner: Yashraj.",
-  "tags": ["ledgerllm"],
+  "tags": [
+    "ledgerllm"
+  ],
   "timezone": "browser",
   "editable": true,
   "schemaVersion": 39,
   "version": 1,
   "refresh": "10s",
-  "time": { "from": "now-15m", "to": "now" },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
   "panels": [
     {
       "type": "row",
       "title": "Operational — is it up, and is it fast?",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "collapsed": false,
       "panels": []
     },
@@ -21,12 +31,23 @@
       "type": "timeseries",
       "title": "Requests/s by status",
       "description": "Traffic and the error mix on the one billable endpoint. 402 = budget exhausted, 429 = rate limited, 400 = blocked by the input guardrail. Both refusal kinds are separate status codes on purpose (decision D7).",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(rate(http_requests_total{handler=\"/v1/summarize\"}[1m])) by (status)",
           "legendFormat": "{{status}}"
         }
@@ -34,31 +55,56 @@
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "type": "timeseries",
       "title": "End-to-end latency p50 / p99",
       "description": "Whole request, client's point of view. Target: p50 <= 3s, p99 <= 8s on a ~3k-token document (DESIGN.md section 1). 8s is a histogram bucket edge, so the p99 reading at the target is exact rather than interpolated.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{handler=\"/v1/summarize\"}[5m])) by (le))",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{handler=\"/v1/summarize\"}[5m])) by (le))",
           "legendFormat": "p99"
         }
@@ -66,38 +112,69 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "custom": { "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 8 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 8
+              }
             ]
           }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "type": "timeseries",
       "title": "Model latency p50 / p99 by model",
       "description": "Time inside the provider call only. The gap between this and end-to-end latency is our platform overhead (auth, quota, guardrails, logging) — target p99 <= 25ms.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "histogram_quantile(0.50, sum(rate(ledgerllm_llm_latency_seconds_bucket[5m])) by (le, model))",
           "legendFormat": "{{model}} p50"
         },
         {
           "refId": "B",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "histogram_quantile(0.99, sum(rate(ledgerllm_llm_latency_seconds_bucket[5m])) by (le, model))",
           "legendFormat": "{{model}} p99"
         }
@@ -105,25 +182,47 @@
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "custom": { "lineWidth": 2, "fillOpacity": 0, "showPoints": "never" }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "type": "timeseries",
       "title": "Upstream provider errors by retryability",
       "description": "Provider timeouts, 5xx and 429s. retryable=true means the client got a Retry-After. Every one of these released its budget reservation, so nothing was billed.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(rate(ledgerllm_upstream_errors_total[5m])) by (model, retryable)",
           "legendFormat": "{{model}} retryable={{retryable}}"
         }
@@ -131,20 +230,35 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": { "lineWidth": 2, "fillOpacity": 20, "showPoints": "never" }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
-
     {
       "type": "row",
       "title": "Cost — who is spending what",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
       "collapsed": false,
       "panels": []
     },
@@ -152,12 +266,23 @@
       "type": "timeseries",
       "title": "Spend per minute by tenant (USD)",
       "description": "Ledger cost is booked in integer micro-USD (decision D5), so this divides by 1e6 to show dollars. The tenant label is the known cardinality risk at 10x scale (DESIGN.md section 5) — the fix is to drop the label and aggregate from usage_ledger.",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 18 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(rate(ledgerllm_cost_microusd_total[5m])) by (tenant) * 60 / 1e6",
           "legendFormat": "{{tenant}}"
         }
@@ -166,25 +291,47 @@
         "defaults": {
           "unit": "currencyUSD",
           "decimals": 6,
-          "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "type": "timeseries",
       "title": "Spend per minute by purpose (USD)",
       "description": "completion = the summary the tenant asked for; guardrail = the safety classifier's own tokens, billed to the tenant (decision D6); judge = sampled online quality scoring, NOT billed to tenants (decision D17). Shows what share of the bill is safety overhead.",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 18 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(rate(ledgerllm_cost_microusd_total[5m])) by (purpose) * 60 / 1e6",
           "legendFormat": "{{purpose}}"
         }
@@ -193,25 +340,50 @@
         "defaults": {
           "unit": "currencyUSD",
           "decimals": 6,
-          "custom": { "lineWidth": 2, "fillOpacity": 30, "stacking": { "mode": "normal" }, "showPoints": "never" }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "stacking": {
+              "mode": "normal"
+            },
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
     {
       "type": "stat",
       "title": "Response cache hit rate",
       "description": "A cache hit is served free and skips the budget reserve entirely (pipeline stage 4.5). Hits over hits+misses only: the metric also emits result=bypass when the cache was never consulted, and counting those in the denominator would understate the hit rate. Reads ledgerllm_cache_total, which arrives with Suraj's cache — shows No data until that merges.",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(rate(ledgerllm_cache_total{result=\"hit\"}[15m])) / clamp_min(sum(rate(ledgerllm_cache_total{result=~\"hit|miss\"}[15m])), 0.0001)",
           "legendFormat": "hit rate"
         }
@@ -223,15 +395,27 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "text", "value": null },
-              { "color": "green", "value": 0.1 }
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0.1
+              }
             ]
           }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "area",
         "textMode": "auto"
@@ -241,12 +425,23 @@
       "type": "timeseries",
       "title": "Tokens/s by direction",
       "description": "Input vs output tokens. Input is driven by document size and the prompt; output is capped from max_words (output_token_cap), which is the guard against a runaway bill on a single request.",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(rate(ledgerllm_tokens_total[5m])) by (direction)",
           "legendFormat": "{{direction}}"
         }
@@ -254,20 +449,35 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
-
     {
       "type": "row",
       "title": "Input — what is arriving, and what we refuse",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 34
+      },
       "collapsed": false,
       "panels": []
     },
@@ -275,38 +485,72 @@
       "type": "bargauge",
       "title": "Rejections in the last hour by reason",
       "description": "Every refusal that happened before the model call, so none of these cost money. During the burst load test budget_exceeded dominates — that is the quota holding.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 35 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(increase(ledgerllm_rejections_total[1h])) by (reason)",
           "legendFormat": "{{reason}}",
           "instant": true
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "palette-classic" } },
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
         "overrides": []
       },
       "options": {
         "displayMode": "gradient",
         "orientation": "horizontal",
         "showUnfilled": true,
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       }
     },
     {
       "type": "timeseries",
       "title": "Guardrail verdicts by stage and category",
       "description": "stage=input screens the user's instructions and the fetched document separately; stage=output moderates the summary. In shadow mode blocked=true still appears here but the request is served — that is how we measure false positives before enforcing (decision D9).",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 35 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(rate(ledgerllm_guardrail_verdicts_total[5m])) by (stage, category, blocked)",
           "legendFormat": "{{stage}} / {{category}} / blocked={{blocked}}"
         }
@@ -314,20 +558,35 @@
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": { "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom" },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       }
     },
-
     {
       "type": "row",
       "title": "Quality — are the summaries any good?",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 43 },
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 43
+      },
       "collapsed": false,
       "panels": []
     },
@@ -335,38 +594,72 @@
       "type": "bargauge",
       "title": "Feedback in the last 24h by prompt version",
       "description": "Our online quality signal, split by the prompt that produced the summary. Prompts are versioned YAML switched by SUMMARIZE_PROMPT_VERSION (decision D11), so shipping summarize_v2 shows up here as a second pair of bars to compare against v1.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 44 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(increase(ledgerllm_feedback_total[24h])) by (prompt_version, rating)",
           "legendFormat": "{{prompt_version}} {{rating}}",
           "instant": true
         }
       ],
       "fieldConfig": {
-        "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "palette-classic" } },
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
         "overrides": []
       },
       "options": {
         "displayMode": "gradient",
         "orientation": "horizontal",
         "showUnfilled": true,
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       }
     },
     {
       "type": "stat",
       "title": "Thumbs-up share (24h)",
       "description": "Share of ratings that were positive. A drop here after a prompt rollout is the signal to flip SUMMARIZE_PROMPT_VERSION back. clamp_min avoids a divide-by-zero before any feedback arrives.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 44 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 44
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
         {
           "refId": "A",
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(increase(ledgerllm_feedback_total{rating=\"up\"}[24h])) / clamp_min(sum(increase(ledgerllm_feedback_total[24h])), 1)",
           "legendFormat": "up share"
         }
@@ -378,19 +671,229 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 0.5 },
-              { "color": "green", "value": 0.75 }
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.5
+              },
+              {
+                "color": "green",
+                "value": 0.75
+              }
             ]
           }
         },
         "overrides": []
       },
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
         "colorMode": "value",
         "graphMode": "area",
         "textMode": "auto"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Judge score by prompt version (6h mean, 1-5)",
+      "description": "Mean LLM-judge score of the sampled live summaries (QUALITY_SAMPLE_RATE, default 5 %), per prompt version and dimension. The online half of the evaluation story: the offline golden set gates a prompt before it ships, this shows whether it stays good on real traffic. GET /admin/quality has the same numbers with a drift flag.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 52
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(ledgerllm_quality_score_sum[6h])) by (prompt_version, dimension) / clamp_min(sum(rate(ledgerllm_quality_score_count[6h])) by (prompt_version, dimension), 1e-9)",
+          "legendFormat": "{{prompt_version}} {{dimension}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 1,
+          "max": 5
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Drift — is today different from last week?",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 60
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Completion cost per successful request (USD)",
+      "description": "Completion spend divided by 200 responses, 1h window. A step up with flat traffic means longer documents, a pricier model or the fallback answering — compare with 'Spend per minute by purpose'. Alert: CostPerRequestDrift.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 61
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(ledgerllm_cost_microusd_total{purpose=\"completion\"}[1h])) / clamp_min(sum(rate(http_requests_total{handler=\"/v1/summarize\",status=\"200\"}[1h])), 1e-9) / 1e6",
+          "legendFormat": "cost / request"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 5,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens per successful request",
+      "description": "Input and output tokens per 200 response, 1h window. Input drifting up is bigger documents; output drifting up without a prompt change is the model getting wordier.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 61
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(ledgerllm_tokens_total{purpose=\"completion\"}[1h])) by (direction) / ignoring(direction) group_left clamp_min(sum(rate(http_requests_total{handler=\"/v1/summarize\",status=\"200\"}[1h])), 1e-9)",
+          "legendFormat": "{{direction}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Guardrail block rate",
+      "description": "Share of guardrail verdicts that blocked, per stage, 1h window. A jump after a rule change is a false-positive regression until shown otherwise — read python -m evals.redteam.shadow_report. Alert: GuardrailBlockRateDrift.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 61
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(ledgerllm_guardrail_verdicts_total{blocked=\"true\"}[1h])) by (stage) / clamp_min(sum(rate(ledgerllm_guardrail_verdicts_total[1h])) by (stage), 1e-9)",
+          "legendFormat": "{{stage}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
       }
     }
   ]
