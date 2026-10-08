@@ -46,3 +46,31 @@ def test_redaction_is_applied_to_request_logs(client, api_key):
         assert "jane.doe@example.com" not in (log.redacted_input or "")
         assert "[EMAIL]" in log.redacted_input and "[PHONE]" in log.redacted_input
         assert log.redaction_counts["input.email"] == 5
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # a number at the end of a sentence is still a phone number
+        ("Call me on +91 98765 43210.", "Call me on [PHONE]."),
+        ("Office: (415) 555-0134.", "Office: [PHONE]."),
+        ("Ring 020 7946 0958. Thanks", "Ring [PHONE]. Thanks"),
+        # the whole number goes, including an opening parenthesis
+        ("Reach us at (415) 555-0134 today", "Reach us at [PHONE] today"),
+        # an international number is a phone, not an Aadhaar number
+        ("WhatsApp +919876543210 now", "WhatsApp [PHONE] now"),
+        # Aadhaar itself is unaffected
+        ("Aadhaar 2345 6789 0123.", "Aadhaar [AADHAAR]."),
+        # IPs and decimals followed by a full stop are not phones
+        ("Host 10.1.2.3.", "Host [IPV4]."),
+        ("Pi is 3.14159265358.", "Pi is 3.14159265358."),
+        ("Pi is 3.14159265358 roughly", "Pi is 3.14159265358 roughly"),
+        # dates and identifiers are not phone numbers
+        ("Meeting on 2026-10-08 at noon.", "Meeting on 2026-10-08 at noon."),
+        ("Invoice INV-2026-000123 paid", "Invoice INV-2026-000123 paid"),
+        # dotted phone numbers still count
+        ("Call 415.555.0134.", "Call [PHONE]."),
+    ],
+)
+def test_phone_edges(text, expected):
+    assert redact(text).text == expected
