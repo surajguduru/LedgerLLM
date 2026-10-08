@@ -74,6 +74,14 @@ def test_model_not_allowed_on_plan(client):
     assert r.json()["error"]["code"] == "model_not_allowed"
 
 
+def test_mock_model_is_on_no_plan(client):
+    """The test double has a price row (for unit tests) but no customer may request it."""
+    for plan in ("free", "pro", "enterprise"):
+        key = make_tenant(client, plan=plan)["api_key"]
+        r = summarize(client, key, model="mock")
+        assert r.status_code == 403 and r.json()["error"]["code"] == "model_not_allowed"
+
+
 def test_upstream_failure_releases_reservation_and_audits(client, api_key):
     r = summarize(client, api_key, text=SAMPLE_TEXT + " [[MOCK_FAIL]]")
     assert r.status_code == 502
