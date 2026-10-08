@@ -231,5 +231,5 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for how the codebase is organised and h
 
 ## Team
 
-Suraj, Loukik, Naresh, Sai, Thrishal, Yashraj. Who owns which part of the system, and the work in each part:
+Suraj, Loukik, Naresh, Sai Venkatesh Alampally, Thrishal, Yashraj. Who owns which part of the system, and the work in each part:
 [`docs/WORK_ALLOCATION.md`](docs/WORK_ALLOCATION.md).
