@@ -58,9 +58,9 @@ def reserved(monkeypatch):
     amounts: list[int] = []
     real = pipeline.budget.reserve
 
-    def spy(db, tenant, plan, est):
+    def spy(db, tenant, plan, est, **kw):
         amounts.append(est)
-        return real(db, tenant, plan, est)
+        return real(db, tenant, plan, est, **kw)
 
     monkeypatch.setattr(pipeline.budget, "reserve", spy)
     return amounts

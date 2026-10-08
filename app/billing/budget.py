@@ -70,8 +70,11 @@ def _ensure_period(db: Session, tenant_id: str, period: str, limit: int) -> Budg
     return bp
 
 
-def reserve(db: Session, tenant: Tenant, plan: Plan, est_microusd: int) -> BudgetDecision:
-    period = current_period()
+def reserve(
+    db: Session, tenant: Tenant, plan: Plan, est_microusd: int, *, now: datetime | None = None
+) -> BudgetDecision:
+    """`now` pins the period; the pipeline reuses it as the ledger time of the request's rows."""
+    period = current_period(now)
     limit = limit_for(tenant, plan)
     _ensure_period(db, tenant.id, period, limit)
 
@@ -140,8 +143,20 @@ def _release_expr(est_microusd: int):
 
 
 def settle(
-    db: Session, tenant_id: str, period: str, est_microusd: int, actual_microusd: int
+    db: Session,
+    tenant_id: str,
+    period: str,
+    est_microusd: int,
+    actual_microusd: int,
+    *,
+    commit: bool = True,
 ) -> None:
+    """Add the actual cost to `spent` and drop the reservation.
+
+    commit=False leaves the update in the caller's transaction. The pipeline uses it for the final
+    settle so spend, ledger rows, request log, cache entry and idempotency record commit together:
+    if any of them fails, nothing is billed and the idempotent retry runs exactly once more.
+    """
     db.execute(
         update(BudgetPeriod)
         .where(BudgetPeriod.tenant_id == tenant_id, BudgetPeriod.period == period)
@@ -151,7 +166,8 @@ def settle(
             updated_at=utcnow(),
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def release(db: Session, tenant_id: str, period: str, est_microusd: int) -> None:
