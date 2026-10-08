@@ -1,4 +1,8 @@
-"""The actual product feature: turn a page into a summary with one LLM call."""
+"""The actual product feature: turn a page into a summary with one LLM call.
+
+A document longer than the plan's input limit is either head+tail-truncated before it gets here
+or summarised in several of these calls by app/feature/longdoc.py (map-reduce, D20).
+"""
 
 from __future__ import annotations
 

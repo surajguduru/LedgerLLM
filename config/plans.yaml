@@ -2,6 +2,9 @@
 # A tenant may override its monthly budget via tenants.budget_override_usd (admin API).
 # default_model: used when a request names no model (cheaper tiers route to cheaper models);
 # must be one of allowed_models. Plans without it fall back to the DEFAULT_MODEL env var.
+# map_reduce_max_chars: text over max_input_chars is summarised whole, chunk by chunk (map-reduce),
+# up to this many characters; beyond it, head+tail-truncated to it first. 0 or absent = off, so
+# long text keeps only its head and tail (D20).
 soft_warning_fraction: 0.8   # past this share of the monthly budget: X-Budget-Warning header + audit event
 
 plans:
@@ -16,6 +19,7 @@ plans:
     rpm: 60
     monthly_budget_usd: 10.00
     max_input_chars: 60000
+    map_reduce_max_chars: 240000   # typically 4-5 chunks + 1 reduce
     cache_ttl_s: 86400
     default_model: gemini-3.8-flash
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, mock]
@@ -23,6 +27,7 @@ plans:
     rpm: 600
     monthly_budget_usd: 100.00
     max_input_chars: 120000
+    map_reduce_max_chars: 600000   # typically 5-6 chunks + 1 reduce
     cache_ttl_s: 86400
     default_model: gemini-3.8-flash
     allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, claude-haiku-4-5, claude-sonnet-5-5, claude-opus-5-5, mock]

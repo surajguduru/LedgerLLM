@@ -291,5 +291,14 @@ def test_text_longer_than_plan_limit_is_truncated_and_flagged(client):
     key = make_tenant(client, plan="free")["api_key"]  # 20k chars
     r = summarize(client, key, text="word " * 6000)
     assert r.status_code == 200
-    assert r.json()["source"]["truncated"] is True
-    assert r.json()["source"]["chars"] == 20000
+    source = r.json()["source"]
+    assert source["truncated"] is True
+    assert source["chars"] == 20000  # head + tail + marker fill the plan limit exactly
+    assert source["strategy"] == "head_tail"
+
+
+def test_text_within_the_plan_limit_is_sent_in_full(client, api_key):
+    r = summarize(client, api_key)
+    assert r.status_code == 200
+    source = r.json()["source"]
+    assert (source["truncated"], source["strategy"]) == (False, "full")
