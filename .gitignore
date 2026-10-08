@@ -13,6 +13,9 @@ build/
 loadtest/results*
 evals/**/results/*
 !evals/summarization/results/last_gemini.json
+!evals/summarization/results/last_groq.json
+# prompt v2 on the same Groq setup, kept next to v1 for the comparison (Task 8)
+!evals/summarization/results/last_groq_v2.json
 .DS_Store
 # team-internal planning docs live outside the repo; never commit them
 team-private/

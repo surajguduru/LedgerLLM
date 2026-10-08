@@ -13,7 +13,9 @@ on Gemini a sibling model): a rubric prompt, strict JSON validation, one retry, 
 tier (requests and estimated tokens per minute) and back off on 429/5xx, for as long as the server's Retry-After
 says when it sends one. thresholds.yaml has a `mock` section (the mock cannot summarise, so it gates
 plumbing only) and a `model` section (the quality gate). Results go to results/last_<provider>.json with run
-metadata (prompt version@hash, models, tokens, wall time, means); results/last_gemini.json is committed.
+metadata (prompt version@hash, models, reasoning efforts, tokens, wall time, means). Committed: results/last_groq.json
+(the 30-case run) and results/last_gemini.json (the 3-case Gemini run; Gemini's free tier allows only 20 flash
+requests a day, so a 30-case run cannot finish there).
 calibration.jsonl + agreement.py measure how far the judge agrees with hand scores.
 
 Golden set: 30 original, synthetic documents (no copied articles), tagged by domain and length. Domains:
