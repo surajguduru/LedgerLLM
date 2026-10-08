@@ -14,7 +14,9 @@ import httpx
 import pytest
 
 from app.config import Settings
+from app.db import SessionLocal
 from app.feature.fetch import FetchBlocked, FetchError, fetch_url, validate_url
+from app.models import RequestLog, UsageLedger
 from tests.conftest import summarize
 
 _REAL_GETADDRINFO = socket.getaddrinfo
@@ -239,10 +241,6 @@ def test_error_status_is_a_fetch_error():
 # --- pipeline --------------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="TODO(Sai): SSRF guard — private/loopback/metadata IPs must be refused with fetch_blocked",
-    strict=False,
-)
 @pytest.mark.parametrize(
     "url",
     [
@@ -250,12 +248,35 @@ def test_error_status_is_a_fetch_error():
         "http://169.254.169.254/latest/meta-data/",
         "http://10.0.0.1/",
         "http://localhost/",
+        "http://[::1]/",
+        "http://[::ffff:127.0.0.1]/",
+        "http://0.0.0.0/",
+        "http://100.64.0.1/",
+        "http://[fd00::1]/",
+        "http://2130706433/",
+        # pydantic's HttpUrl accepts userinfo, so this one reaches validate_url
+        "http://user@example.com/",
     ],
 )
 def test_ssrf_targets_are_blocked(client, api_key, url):
     r = summarize(client, api_key, text=None, url=url)
-    assert r.status_code == 400
+    assert r.status_code == 400, r.text
     assert r.json()["error"]["code"] == "fetch_blocked"
+
+
+def test_blocked_fetch_is_logged_and_bills_nothing(client, api_key):
+    r = summarize(client, api_key, text=None, url="http://169.254.169.254/latest/meta-data/")
+    assert r.status_code == 400
+    with SessionLocal() as db:
+        log = db.query(RequestLog).filter_by(request_id=r.json()["error"]["request_id"]).one()
+        assert (log.status_code, log.error_code) == (400, "fetch_blocked")
+        assert db.query(UsageLedger).count() == 0
+
+
+def test_unresolvable_host_is_fetch_failed(client, api_key):
+    r = summarize(client, api_key, text=None, url="http://does-not-exist.invalid/")
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "fetch_failed"
 
 
 def test_non_http_scheme_rejected(client, api_key):
