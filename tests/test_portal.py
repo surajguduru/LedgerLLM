@@ -256,8 +256,10 @@ def test_models_lists_the_plan_with_prices(client):
     signup(client)  # free plan
     m = client.get("/app/api/models").json()
     ids = [x["id"] for x in m["models"]]
-    assert ids == list(get_plan_models("free")) and m["default"] == "gemini-3.5-flash-lite"
-    assert all(x["input_usd_per_mtok"] > 0 for x in m["models"] if x["id"] != "mock")
+    assert ids == list(get_plan_models("free"))
+    assert "mock" not in ids  # the test double is on no plan, so never offered
+    assert m["default"] == "gemini-3.5-flash-lite"
+    assert all(x["input_usd_per_mtok"] > 0 for x in m["models"])
 
 
 def get_plan_models(name):

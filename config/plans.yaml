@@ -14,7 +14,7 @@ plans:
     max_input_chars: 20000
     cache_ttl_s: 3600        # identical request served from cache for 1 h; 0 = off
     default_model: gemini-3.5-flash-lite
-    allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, openai/gpt-oss-20b, mock]
+    allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, openai/gpt-oss-20b]
   pro:
     rpm: 60
     monthly_budget_usd: 10.00
@@ -22,7 +22,7 @@ plans:
     map_reduce_max_chars: 240000   # typically 4-5 chunks + 1 reduce
     cache_ttl_s: 86400
     default_model: gemini-3.8-flash
-    allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.8-27b, mock]
+    allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.8-27b]
   enterprise:
     rpm: 600
     monthly_budget_usd: 100.00
@@ -30,4 +30,4 @@ plans:
     map_reduce_max_chars: 600000   # typically 5-6 chunks + 1 reduce
     cache_ttl_s: 86400
     default_model: gemini-3.8-flash
-    allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, claude-haiku-4-5, claude-sonnet-5-5, claude-opus-5-5, openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.8-27b, mock]
+    allowed_models: [gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite, claude-haiku-4-5, claude-sonnet-5-5, claude-opus-5-5, openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.8-27b]
