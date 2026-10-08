@@ -245,6 +245,12 @@ def test_root_goes_to_the_portal(client):
     assert r.headers["location"] == "/app"
 
 
+def test_grafana_redirects_to_the_dashboard(client):
+    r = client.get("/grafana", follow_redirects=False)
+    assert r.status_code == 307
+    assert r.headers["location"] == get_settings().grafana_url
+
+
 # --- concurrency (Postgres only) -------------------------------------------------------------
 
 

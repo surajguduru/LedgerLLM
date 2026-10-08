@@ -64,6 +64,12 @@ class Settings(BaseSettings):
     portal_session_days: int = 7
     portal_cookie_secure: bool | None = None
 
+    # Where /grafana sends people: the hosted admin dashboard. Point at http://localhost:3000/d/ledgerllm/ledgerllm
+    # for the docker-compose stack.
+    grafana_url: str = (
+        "https://ledgerllm-admin.onrender.com/d/ledgerllm-admin/ledgerllm-e28094-admin"
+    )
+
     # Versioned config artifacts
     plans_path: Path = ROOT / "config" / "plans.yaml"
     prices_path: Path = ROOT / "config" / "prices.yaml"

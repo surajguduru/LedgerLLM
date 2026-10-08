@@ -57,6 +57,10 @@ def create_app() -> FastAPI:
     def root() -> RedirectResponse:
         return RedirectResponse("/app")
 
+    @app.get("/grafana", include_in_schema=False)
+    def grafana() -> RedirectResponse:
+        return RedirectResponse(settings.grafana_url)
+
     return app
 
 

@@ -9,6 +9,10 @@ Stage order is a design decision (docs/DESIGN.md, D6): cheap checks first, so ab
 traffic never costs an LLM call; the budget is reserved *before* the guardrail so classifier spend
 can be booked to the tenant too. This file is the integration point — changes to it are reviewed by
 the stream owner whose stage is affected (see CONTRIBUTING.md).
+
+Stages 4, 6 and 7 wait on the network for seconds (URL fetch, classifier, model), so no transaction
+may be open across them: it would hold the request's pooled connection for the whole call
+(tests/test_db_connection_release.py).
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import case, update
+from sqlalchemy import case, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -82,11 +82,22 @@ def sync_limit(db: Session, tenant: Tenant, plan: Plan) -> None:
 def reserve(
     db: Session, tenant: Tenant, plan: Plan, est_microusd: int, *, now: datetime | None = None
 ) -> BudgetDecision:
-    """`now` pins the period; the pipeline reuses it as the ledger time of the request's rows."""
+    """`now` pins the period; the pipeline reuses it as the ledger time of the request's rows.
+
+    Returns with no transaction open. The pipeline's model calls come next and take seconds; a read
+    left open here would keep the request's pooled connection checked out for all of them, so the
+    pool, not the model, would cap concurrent requests (tests/test_db_connection_release.py).
+    """
     period = current_period(now)
     limit = limit_for(tenant, plan)
     _ensure_period(db, tenant.id, period, limit)
 
+    numbers = (
+        BudgetPeriod.hard_limit_microusd,
+        BudgetPeriod.spent_microusd,
+        BudgetPeriod.reserved_microusd,
+        BudgetPeriod.soft_warned_at,
+    )
     stmt = (
         update(BudgetPeriod)
         .where(
@@ -98,26 +109,33 @@ def reserve(
         .values(
             reserved_microusd=BudgetPeriod.reserved_microusd + est_microusd, updated_at=utcnow()
         )
+        .returning(*numbers)
     )
-    allowed = db.execute(stmt).rowcount == 1
+    # The admitted row comes back from the UPDATE itself; a refusal reads it for the 402's numbers.
+    after = db.execute(stmt).one_or_none()
+    allowed = after is not None
+    if after is None:
+        after = db.execute(
+            select(*numbers).where(
+                BudgetPeriod.tenant_id == tenant.id, BudgetPeriod.period == period
+            )
+        ).one()
     db.commit()
 
-    bp = db.get(BudgetPeriod, (tenant.id, period))
-    db.refresh(bp)
-    committed = bp.spent_microusd + bp.reserved_microusd
-    warning = committed >= load_plans().soft_warning_fraction * bp.hard_limit_microusd
+    hard_limit, spent, reserved, soft_warned_at = after
+    warning = spent + reserved >= load_plans().soft_warning_fraction * hard_limit
     first_warning = (
         allowed
         and warning
-        and bp.soft_warned_at is None
+        and soft_warned_at is None
         and _claim_soft_warning(db, tenant.id, period)
     )
     return BudgetDecision(
         allowed=allowed,
         period=period,
-        limit_microusd=bp.hard_limit_microusd,
-        spent_microusd=bp.spent_microusd,
-        reserved_microusd=bp.reserved_microusd,
+        limit_microusd=hard_limit,
+        spent_microusd=spent,
+        reserved_microusd=reserved,
         warning=warning,
         first_warning=first_warning,
     )
