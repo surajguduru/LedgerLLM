@@ -1,5 +1,10 @@
 """Tenant portal: sign-up, sign-in, sessions, CSRF guard, self-service keys, per-key usage (D24)."""
 
+import json
+import os
+import re
+import shutil
+import subprocess
 from datetime import timedelta
 
 import pytest
@@ -8,6 +13,7 @@ from sqlalchemy import select, update
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import AuditEvent, BudgetPeriod, PortalSession, User, utcnow
+from app.portal.pages import JS
 from tests.conftest import ADMIN, summarize
 from tests.conftest import SAMPLE_TEXT as SAMPLE
 
@@ -343,3 +349,21 @@ def test_playground_needs_session_and_same_origin(client):
     assert code(client.post("/app/api/playground/summarize", json=body)) == "cross_origin"
     client.cookies.clear()
     assert code(post(client, "/playground/summarize", body)) == "not_signed_in"
+
+
+# --- page formatting ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node to run the page's JS")
+def test_money_shows_sub_cent_amounts_instead_of_rounding_to_cents():
+    """A free tenant with $0.0004 spent has $0.499601 left — the overview must not say $0.50."""
+    usd = re.search(r"const usd = .*?;\n", JS, re.S).group(0)
+    cases = [0.499601, 0.5, 10, 0.000399, 0, 1234.5]
+    out = subprocess.run(
+        ["node", "-e", f"{usd}\nconsole.log(JSON.stringify({cases}.map(n => usd(n))))"],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={"LANG": "en_US.UTF-8", "PATH": os.environ["PATH"]},
+    ).stdout
+    assert json.loads(out) == ["$0.499601", "$0.50", "$10.00", "$0.000399", "$0.00", "$1,234.50"]
