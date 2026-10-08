@@ -186,6 +186,25 @@ class RequestLog(Base):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class QualitySample(Base):
+    """LLM-judge score for a sampled live summary. Owner: Thrishal. Judge cost is platform cost (D17)."""
+
+    __tablename__ = "quality_samples"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    judge_model: Mapped[str] = mapped_column(String(80), nullable=False)
+    faithfulness: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )  # 1-5; None = unparsable
+    coverage: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    issues: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    judge_latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    judged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class Feedback(Base):
     """Thumbs up/down per request — the 'online' signal in our evaluation plan."""
 
