@@ -130,7 +130,7 @@ def test_judge_cost_is_not_settled_against_the_tenant(client, api_key, stub):
     online_judge.drain()
     usage = client.get("/v1/usage", headers={"X-API-Key": api_key}).json()
     purposes = {p["purpose"]: p for p in usage["by_purpose"]}
-    assert purposes["judge"]["calls"] == 1 and purposes["judge"]["cost_usd"] > 0  # visible...
+    assert purposes["judge"]["calls"] == 1 and float(purposes["judge"]["cost_usd"]) > 0  # visible
     assert abs(usage["spent_usd"] - r.json()["usage"]["cost_usd"]) < 1e-9  # ...but not charged
 
 

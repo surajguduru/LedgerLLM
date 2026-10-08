@@ -123,4 +123,4 @@ def test_classifier_tokens_are_billed_to_the_tenant(client, api_key, llm_on, stu
     purposes = {p["purpose"]: p for p in after["by_purpose"]}
     assert purposes["guardrail"]["calls"] == 1
     assert after["spent_usd"] > before["spent_usd"]
-    assert purposes["guardrail"]["cost_usd"] > 0
+    assert float(purposes["guardrail"]["cost_usd"]) > 0  # Decimal→str on Postgres
