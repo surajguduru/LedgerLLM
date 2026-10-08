@@ -1,3 +1,11 @@
+"""The provider protocol every model backend implements, and the two types it trades in.
+
+The pipeline calls `complete()` and reads an `LLMResult`; it never imports a vendor module. `LLMResult.model`
+is the configured name that config/prices.yaml prices, and `output_tokens` is what the provider bills,
+hidden reasoning included, so the ledger can be computed from the result alone. A failure is a
+`ProviderError`; `retryable` decides whether the fallback chain (app/llm/fallback.py) may try another model.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

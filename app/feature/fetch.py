@@ -37,7 +37,18 @@ against the original host name, which is easy to get subtly wrong and deserves i
 Pages longer than the plan allows are shortened (head + tail) or map-reduced in
 app/feature/longdoc.py (D20), not here: the fetch returns the whole extracted text.
 
-OWNER: Sai. Still to do: content-type handling (PDF via pypdf is a stretch goal).
+Extraction: an HTML body (by content type, or a body that starts with "<") goes through trafilatura,
+which keeps the main text and the title and drops navigation, boilerplate and comments; any other body is
+decoded with the response's charset and used as text. No text at all is 422 `fetch_failed`. Measured on 10
+public pages (docs/MEASUREMENTS.md, 8 Oct): median yield 3.4 % of the HTML bytes, median fetch 707 ms.
+
+Known limits of extraction:
+- JavaScript is not run, so a client-rendered page yields only its server-rendered text (figma.com: 1,033
+  characters out of 1.7 MB) or nothing (422).
+- Binary formats are not recognised. A PDF is decoded as if it were text and comes back as noise that would
+  be summarised and billed; it should be refused by content type, or parsed with pypdf (the brief's stretch
+  goal). Not changed yet.
+- Index pages (news sections, repository pages) extract as lists of teasers, which summarise poorly.
 """
 
 from __future__ import annotations

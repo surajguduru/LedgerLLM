@@ -1,4 +1,4 @@
-"""LLM providers behind one protocol (app/llm/base.py). OWNER: Sai.
+"""LLM providers behind one protocol (app/llm/base.py), built from settings once per process.
 
 LLM_PROVIDER selects: mock (default; free, offline) · gemini (free tier) · groq · openai · openrouter · ollama ·
 openai_compat (custom LLM_BASE_URL) · anthropic (official SDK). LLM_API_KEY is the key for whichever is selected.
