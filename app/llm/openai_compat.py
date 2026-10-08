@@ -124,13 +124,14 @@ class OpenAICompatibleProvider:
         completion = usage.get("completion_tokens")
         return LLMResult(
             text=text,
-            model=data.get("model") or model,
+            model=model,
             input_tokens=int(usage.get("prompt_tokens") or estimate_tokens(system + user)),
             output_tokens=(int(completion) if completion is not None else estimate_tokens(text))
             + unreported,
             latency_ms=latency_ms,
             stop_reason=choice.get("finish_reason"),
             reasoning_tokens=int(details.get("reasoning_tokens") or unreported),
+            provider=self.name,
         )
 
 
