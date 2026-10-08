@@ -86,8 +86,8 @@ direction of the call, whether the caller waits, the protocol and the data forma
 ### 2.2 Request pipeline — `POST /v1/summarize`, synchronous, JSON over HTTPS
 ```
 client ─▶ ① auth: X-API-Key → tenant, plan                               401 / 403
-          ② idempotency replay (tenant, Idempotency-Key)                  200 replay / 409
-          ③ rate limit: per key+tenant, 60 s window, plan.rpm            429 + Retry-After
+          ② rate limit: per key+tenant, 60 s window, plan.rpm            429 + Retry-After
+          ③ idempotency replay (tenant, Idempotency-Key)                  200 replay / 409
           ④ acquire content: fetch URL (SSRF guard) → extract → fit (D20)  422 / 400
           ④½ exact-match response cache (per tenant) — a hit returns here  200, cost 0
           ⑤ estimate worst-case cost → ATOMIC RESERVE on budget_periods    402

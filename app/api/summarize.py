@@ -1,6 +1,6 @@
 """POST /v1/summarize — the request pipeline. Each stage calls into exactly one package:
 
-    1 auth (app/auth)  ->  2 idempotency replay (app/traffic)  ->  3 rate limit (app/traffic)
+    1 auth (app/auth)  ->  2 rate limit (app/traffic)  ->  3 idempotency replay (app/traffic)
     ->  4 acquire content (app/feature)  ->  5 estimate + reserve budget (app/billing)
     ->  6 input guardrail (app/guardrails)  ->  7 LLM (app/llm)  ->  8 output guardrail (app/guardrails)
     ->  9 settle + ledger (app/billing)  ->  10 redacted log + audit (app/compliance), metrics (app/observability)
@@ -244,7 +244,25 @@ def summarize(
     t0 = perf_counter()
     elapsed = lambda: int((perf_counter() - t0) * 1000)  # noqa: E731
 
-    # 2. idempotency replay / claim ------------------------------------------------------------
+    # 2. rate limit ----------------------------------------------------------------------------
+    # Before the replay: a replay is free, but a storm of them is still traffic against the plan's rpm.
+    plan = auth.plan
+    rl = check_rate_limit(db, auth.api_key.id, plan, tenant_id=auth.tenant.id)
+    response.headers.update(rl.headers())
+    if not rl.allowed:
+        raise _fail(
+            db,
+            status=429,
+            code="rate_limited",
+            message=f"plan '{plan.name}' allows {plan.rpm} requests/minute",
+            request_id=request_id,
+            auth=auth,
+            latency_ms=elapsed(),
+            audit_type=audit_events.RATE_LIMITED,
+            headers={"Retry-After": str(rl.retry_after_s), **rl.headers()},
+        )
+
+    # 3. idempotency replay / claim ------------------------------------------------------------
     request_hash = idempotency.hash_request(payload)
     if not idempotency_key:
         try:
@@ -280,7 +298,7 @@ def summarize(
         return JSONResponse(
             status_code=existing.status_code,
             content=json.loads(existing.response_json),
-            headers={"Idempotent-Replayed": "true", "X-Request-ID": request_id},
+            headers={"Idempotent-Replayed": "true", "X-Request-ID": request_id, **rl.headers()},
         )
     if existing is not None or not idempotency.claim(
         db,
@@ -332,26 +350,10 @@ def _pipeline(
     bypass_cache: bool,
     t0: float,
 ):
-    """Stages 3-10. Runs at most once per idempotency key at a time (see `summarize`)."""
+    """Stages 4-10. Runs at most once per idempotency key at a time (see `summarize`)."""
     elapsed = lambda: int((perf_counter() - t0) * 1000)  # noqa: E731
     tenant, key, plan = auth.tenant, auth.api_key, auth.plan
     raw_for_log = payload.text or str(payload.url)
-
-    # 3. rate limit ----------------------------------------------------------------------------
-    rl = check_rate_limit(db, key.id, plan, tenant_id=tenant.id)
-    response.headers.update(rl.headers())
-    if not rl.allowed:
-        raise _fail(
-            db,
-            status=429,
-            code="rate_limited",
-            message=f"plan '{plan.name}' allows {plan.rpm} requests/minute",
-            request_id=request_id,
-            auth=auth,
-            latency_ms=elapsed(),
-            audit_type=audit_events.RATE_LIMITED,
-            headers={"Retry-After": str(rl.retry_after_s), **rl.headers()},
-        )
 
     # 4. acquire content -----------------------------------------------------------------------
     model = payload.model or plan.default_model or settings.default_model

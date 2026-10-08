@@ -95,8 +95,8 @@ make down
 
 ```
 client ─JSON/HTTPS─▶ ① auth (API key → tenant, plan)         ⑥ input guardrail (instructions, then document)
-                     ② idempotency replay                     ⑦ LLM call with the versioned prompt
-                     ③ rate limit (per key + tenant, /min)   ⑧ output moderation
+                     ② rate limit (per key + tenant, /min)   ⑦ LLM call with the versioned prompt
+                     ③ idempotency replay                     ⑧ output moderation
                      ④ fetch URL + extract text (SSRF-guarded) ⑨ settle actual cost; ledger row; metrics
                      ⑤ estimate cost → ATOMIC budget reserve  ⑩ redacted request log; audit; idempotent store
 ```
@@ -301,7 +301,7 @@ because their worst case would not. Decision D23 in `docs/DESIGN.md` covers how 
   request (Postgres and SQLite). Free 5, pro 60, enterprise 600 requests/minute. A check costs p50 0.75 ms / p99 1.4 ms
   on Postgres; the accepted cost of a fixed window is up to 2× rpm across a window boundary (measured: exactly 2.0×).
 - **Idempotency** — `Idempotency-Key` is scoped per tenant and kept for 24 h. The same key with the same body replays the
-  stored response and is never billed twice; with a different body it is 409 `idempotency_conflict`; while the first
+  stored response and is never billed twice (a replay still counts against the rate limit and carries `X-RateLimit-*`); with a different body it is 409 `idempotency_conflict`; while the first
   request is still running, a duplicate gets 409 `idempotency_in_progress`. A failed request frees the key for a retry.
 - **Response cache** — exact match on tenant, model, prompt hash, options and the extracted text, checked before the budget
   reserve. A hit is free (`usage.cached: true`, `cost_usd: 0`) and is booked as a zero-cost ledger row so request counts
