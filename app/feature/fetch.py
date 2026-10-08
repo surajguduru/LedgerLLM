@@ -23,6 +23,17 @@ and validating the result before requesting it.
 Bodies are streamed and reading stops at `settings.fetch_max_bytes`, so a huge (or endless)
 response costs at most that much memory and bandwidth instead of being downloaded and sliced.
 
+Known limitation: DNS rebinding (time of check vs time of use). `validate_url` resolves the
+name, then httpx resolves it again when it connects; a hostile DNS server with a zero TTL can
+answer with a public address the first time and 127.0.0.1 the second. The fixes all move the
+check to connect time: an egress proxy that enforces the policy on the address it dials, a
+network policy that denies RFC 1918 and metadata ranges, or connecting to the validated address
+with an explicit Host header and TLS SNI. The one we would build next is the last: it needs no
+infrastructure on the free tier and closes the window completely. It is not built yet because it
+needs a custom httpx transport that rewrites the target while still verifying the certificate
+against the original host name, which is easy to get subtly wrong and deserves its own change
+(docs/DESIGN.md, D18).
+
 OWNER: Sai. Still to do: truncation strategy for long pages (head + tail, map-reduce as a stretch
 goal); content-type handling (PDF via pypdf is a stretch goal).
 """
