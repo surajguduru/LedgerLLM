@@ -9,6 +9,20 @@ Format: **what** · value · conditions · command · date · who.
 - Rate-limit check (atomic upsert + commit), 1,000 calls: Postgres 16 in Docker on a laptop p50 747 µs / p99 1,404 µs; SQLite file p50 317 µs / p99 711 µs · `python -m scripts.bench_traffic` · 6 Oct · Suraj.
 - Fixed-window edge burst: 10 requests admitted within 2 s on the free plan (rpm 5) = 2.0× rpm, the bound D3 accepts · `python -m scripts.bench_traffic` · 6 Oct · Suraj.
 - Docker image 460 MB; container start → `/healthz` OK in 1.1 s locally (Render free-tier wake-up still to measure) · `docker build`, `docker run` · 6 Oct · Suraj.
+- Gemini reasoning tokens vs `reasoning_effort`, one ~300-word news document, bullets ≤ 80 words, `max_tokens` 250 · 8 Oct · Sai Venkatesh. Reasoning = `total − prompt − completion` (the endpoint sends no `completion_tokens_details`); prompt was 355 tokens in every call:
+
+  | model | `reasoning_effort` | HTTP | finish | visible chars | completion tokens | reasoning tokens |
+  |---|---|---|---|---|---|---|
+  | gemini-3.8-flash | not sent | 200 | length | 29 | 6 | 240 |
+  | gemini-3.8-flash | none | 200 | stop | 525 | 108 | 0 |
+  | gemini-3.8-flash | minimal | 400 "Thinking level MINIMAL is not supported" | – | – | – | – |
+  | gemini-3.8-flash | low | 200 (two 503 "high demand" first) | stop | 524 | 106 | 0 |
+  | gemini-3.5-flash-lite | not sent | 200 | stop | 537 | 119 | 0 |
+  | gemini-3.5-flash-lite | none | 400 "invalid argument" | – | – | – | – |
+  | gemini-3.5-flash-lite | minimal | 200 | stop | 553 | 122 | 0 |
+  | gemini-3.5-flash-lite | low | 200 | stop | 474 | 109 | 0 |
+
+  Findings: `completion_tokens` excludes reasoning, `total_tokens` includes it, and `max_tokens` caps both together (6 + 240 = 246 ≤ 250), so the reservation bound holds once reasoning is billed as output. "low" is the lowest level both models accept and is now the Gemini default · throwaway httpx script against `/v1beta/openai/chat/completions` (11 calls) · 8 Oct · Sai Venkatesh.
 
 ## Trade-offs ("we chose X over Y because Z")
 - Postgres-only over Redis for counters/budgets — one atomic UPDATE suffices under 100 rps; one fewer service.
@@ -20,4 +34,5 @@ Format: **what** · value · conditions · command · date · who.
 ## Failure modes (and the handling)
 - Provider failure → 502, reservation released, nothing billed, audit event (`test_upstream_failure_releases_reservation_and_audits`).
 - Duplicate request in flight with the same Idempotency-Key → 409 `idempotency_in_progress` + Retry-After; a failed request releases the key (`test_duplicate_in_flight_gets_409_in_progress`, `test_failure_clears_pending_so_retry_runs`).
+- Reasoning model spends the whole output budget → `finish_reason: length` with no text → non-retryable `ProviderError` → 502 `upstream_error`, reservation released, nothing billed; the platform absorbs whatever the provider charged (`test_exhausted_budget_returns_502_and_bills_nothing`).
 - Two identical cache misses at once → the cache write is an upsert, so neither request fails (`cache.store`).

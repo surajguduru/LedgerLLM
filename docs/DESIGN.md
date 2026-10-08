@@ -131,6 +131,7 @@ Local: docker compose = app + postgres + prometheus + grafana
 | Price change | New `prices.yaml` version; old rows keep the old version | ledger `price_version` |
 | Key leak | Revoke; `last_used_at`; audit trail | `api_keys.revoked_at` |
 | Runaway output | `max_tokens` derived from `max_words`, capped by the prompt artifact | `output_token_cap` |
+| Reasoning model spends the output budget → empty text | Gemini preset sends `reasoning_effort=low` (`LLM_REASONING_EFFORT`); hidden reasoning tokens are billed as output so the ledger matches the provider; `finish_reason: length` with empty text → non-retryable `ProviderError` → 502 `upstream_error`, reservation released, nothing billed (the platform absorbs any provider charge) | `test_exhausted_budget_returns_502_and_bills_nothing`; MEASUREMENTS.md reasoning table |
 
 ---
 
