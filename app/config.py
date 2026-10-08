@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +50,14 @@ class Settings(BaseSettings):
 
     # Admin
     admin_token: str = DEFAULT_ADMIN_TOKEN
+    # /metrics lists every tenant's spend. Set: it needs `Authorization: Bearer <token>`. Unset: open in
+    # dev/test (docker-compose's Prometheus scrapes it), 404 anywhere else (see app/observability/metrics.py).
+    metrics_token: str | None = None
+
+    # The deployed commit, shown by /healthz. Render sets RENDER_GIT_COMMIT; elsewhere set GIT_COMMIT.
+    git_commit: str | None = Field(
+        None, validation_alias=AliasChoices("RENDER_GIT_COMMIT", "GIT_COMMIT")
+    )
 
     # Tenant portal (/app): session lifetime, and whether the cookie is HTTPS-only. None = secure
     # everywhere except APP_ENV dev/test, where the app is served over plain http://localhost.

@@ -6,9 +6,14 @@ drop the tenant label here and aggregate per-tenant from usage_ledger instead (s
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+import secrets
+
+from fastapi import Depends, FastAPI, Header
 from prometheus_client import Counter, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
+
+from app.config import get_settings
+from app.errors import ApiError
 
 # Buckets for the per-handler HTTP latency histogram. The library default is only (0.1, 0.5, 1),
 # which cannot express either of our two latency targets. A histogram quantile is interpolated
@@ -59,6 +64,26 @@ UPSTREAM_ERRORS = Counter(
 )
 
 
+def require_metrics_access(authorization: str | None = Header(None)) -> None:
+    """/metrics carries every tenant's spend by tenant id, so it is not public outside dev/test.
+
+    With METRICS_TOKEN set, it needs that bearer token. Without one, dev and test (and the
+    docker-compose Prometheus) read it openly, and any other APP_ENV answers 404 as if the route did
+    not exist: production has no scraper (Prometheus is not deployed), so nothing needs it there.
+    """
+    s = get_settings()
+    if s.metrics_token:
+        token = (
+            authorization[7:].strip() if (authorization or "").lower().startswith("bearer ") else ""
+        )
+        # bytes: compare_digest refuses a str with non-ASCII characters (header values are latin-1)
+        if not secrets.compare_digest(token.encode(), s.metrics_token.encode()):
+            raise ApiError(401, "metrics_unauthorized", "metrics token required")
+        return
+    if s.app_env not in ("dev", "test"):
+        raise ApiError(404, "not_found", "no route GET /metrics")
+
+
 def setup_metrics(app: FastAPI) -> None:
     Instrumentator(
         should_group_status_codes=False,
@@ -70,7 +95,12 @@ def setup_metrics(app: FastAPI) -> None:
         # builds that instrumentation inside the middleware, and a second default() call in the
         # same process returns None (duplicate registration), which silently instruments nothing.
         latency_lowr_buckets=HTTP_LATENCY_BUCKETS,
-    ).expose(app, endpoint="/metrics", include_in_schema=False)
+    ).expose(
+        app,
+        endpoint="/metrics",
+        include_in_schema=False,
+        dependencies=[Depends(require_metrics_access)],
+    )
 
 
 def record_booking(

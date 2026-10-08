@@ -29,6 +29,11 @@ services:
         sync: false
       - key: ADMIN_TOKEN
         generateValue: true
+      - key: METRICS_TOKEN             # /metrics needs `Authorization: Bearer <this>`; nothing scrapes it here
+        generateValue: true
+      # Safe to trust every X-Forwarded-For hop: a Render web service is reachable only through Render's proxy.
+      - key: FORWARDED_ALLOW_IPS
+        value: "*"
 
   # Admin dashboard: Grafana with our dashboards baked in (ops/grafana/Dockerfile), reading the
   # production database through a Neon READ REPLICA endpoint. Read-only by design — suspend, revoke,

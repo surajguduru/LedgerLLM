@@ -137,7 +137,7 @@ Headers on every response: `X-Request-ID`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 | `/app/api/*` | portal JSON API (session cookie): `signup`, `login`, `logout`, `me`, `keys` (create, `/{id}/revoke`, `/{id}/rotate`), `models`, `playground/summarize`, `usage?period=`, `statement.csv`, `billing`, `billing/plan` |
 | `GET /dashboard` | usage/billing page for a tenant (paste a key) |
 | `POST /admin/tenants`, `POST /admin/tenants/{id}/keys`, `GET /admin/tenants` | tenant and key management (`Authorization: Bearer $ADMIN_TOKEN`) |
-| `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus, health, OpenAPI |
+| `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus (needs `Authorization: Bearer $METRICS_TOKEN` when set; 404 outside dev/test without it), health and deployed commit, OpenAPI |
 
 Errors always look like `{"error": {"code": "…", "message": "…", "request_id": "…"}}` with stable codes:
 `401 missing_api_key | invalid_api_key` · `403 tenant_suspended | model_not_allowed` · `429 rate_limited` ·
@@ -512,7 +512,8 @@ rules for these signals are in [`ops/alerts.yml`](ops/alerts.yml).
 `/metrics` exposes `ledgerllm_cost_microusd_total{tenant,model,purpose}`, `ledgerllm_tokens_total`,
 `ledgerllm_rejections_total{reason}`, `ledgerllm_llm_latency_seconds`, `ledgerllm_guardrail_verdicts_total`,
 `ledgerllm_feedback_total`, `ledgerllm_quality_score{prompt_version,dimension}`, plus HTTP request counts and
-latency histograms. Grafana dashboards are provisioned
+latency histograms. These are labelled by tenant id, so `/metrics` is not public: with `METRICS_TOKEN` set it needs
+that bearer token, and without one it is open only in dev/test (the docker-compose Prometheus). Grafana dashboards are provisioned
 from `ops/grafana/dashboards/`. Logs are JSON with a `request_id` on every line; the `request_logs` (redacted)
 and `audit_events` tables explain every refusal after the fact.
 
@@ -534,7 +535,9 @@ Docker image (`Dockerfile`) deployed as a Render web service via `render.yaml`, 
 (step-by-step runbook: [`docs/DEPLOY.md`](docs/DEPLOY.md)).
 Configuration is entirely environment variables: `DATABASE_URL`, `LLM_PROVIDER`, `LLM_API_KEY`,
 `ADMIN_TOKEN`, `GUARDRAILS_MODE`, `GUARDRAIL_LLM`, `QUALITY_SAMPLE_RATE`, `SUMMARIZE_PROMPT_VERSION`,
-`RESPONSE_CACHE_ENABLED`, `MAX_REQUEST_BYTES`. Merges to `main` deploy automatically once CI
+`RESPONSE_CACHE_ENABLED`, `MAX_REQUEST_BYTES`, `METRICS_TOKEN`, `FORWARDED_ALLOW_IPS` (proxies whose
+`X-Forwarded-For` uvicorn trusts; `*` on Render). `GET /healthz` reports the deployed commit as `version`
+(`RENDER_GIT_COMMIT`, or `GIT_COMMIT`). Merges to `main` deploy automatically once CI
 and both eval gates pass. The app is stateless, so it scales horizontally without changes.
 
 ## Repository layout
