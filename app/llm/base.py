@@ -24,10 +24,25 @@ class LLMResult:
 
 
 class ProviderError(Exception):
-    def __init__(self, message: str, *, retryable: bool = False, code: str = "upstream_error"):
+    """A provider call failed. `retryable` covers 429, 5xx, timeouts and network errors.
+
+    `retry_after_s` is the server's own hint (the `Retry-After` header on a 429 or 5xx), when it sent one:
+    callers that retry should wait that long rather than guess, because the server knows when its
+    window resets. None means no hint.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        code: str = "upstream_error",
+        retry_after_s: float | None = None,
+    ):
         super().__init__(message)
         self.retryable = retryable
         self.code = code
+        self.retry_after_s = retry_after_s
 
 
 class LLMProvider(Protocol):

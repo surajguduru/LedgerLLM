@@ -1,6 +1,7 @@
 """Provider adapter tests. OWNER: Sai. The OpenAI-compatible adapter is exercised with a fake transport."""
 
 import json
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -10,7 +11,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.llm import get_provider
 from app.llm.base import ProviderError
-from app.llm.openai_compat import PRESETS, OpenAICompatibleProvider
+from app.llm.openai_compat import PRESETS, OpenAICompatibleProvider, parse_retry_after
 from app.models import AuditEvent, BudgetPeriod, UsageLedger
 from tests.conftest import summarize
 
@@ -71,6 +72,39 @@ def test_rate_limit_is_retryable():
     with pytest.raises(ProviderError) as e:
         p.complete(model="m", system="s", user="u", max_tokens=10)
     assert e.value.retryable is True
+
+
+def test_rate_limit_carries_the_retry_after_header():
+    p = _provider(lambda r: httpx.Response(429, headers={"retry-after": "7"}, json={}), name="groq")
+    with pytest.raises(ProviderError) as e:
+        p.complete(model="m", system="s", user="u", max_tokens=10)
+    assert e.value.retryable is True and e.value.retry_after_s == 7.0
+
+
+def test_server_error_without_retry_after_has_no_hint():
+    p = _provider(lambda r: httpx.Response(503, json={}))
+    with pytest.raises(ProviderError) as e:
+        p.complete(model="m", system="s", user="u", max_tokens=10)
+    assert e.value.retryable is True and e.value.retry_after_s is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("7", 7.0),
+        (" 2.5 ", 2.5),
+        ("0", 0.0),
+        ("-3", 0.0),
+        ("Thu, 08 Oct 2026 12:00:30 GMT", 30.0),
+        ("Thu, 08 Oct 2026 11:59:00 GMT", 0.0),  # already past: no wait
+        (None, None),
+        ("", None),
+        ("soon", None),
+    ],
+)
+def test_parse_retry_after(value, expected):
+    now = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
+    assert parse_retry_after(value, now=now) == expected
 
 
 def test_bad_request_is_not_retryable():
