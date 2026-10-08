@@ -12,17 +12,24 @@ Codes and statuses (keep this table in sync with docs/DESIGN.md):
     409 idempotency_in_progress (+Retry-After)
     401 admin_unauthorized                     500 internal_error
     404 tenant_not_found / key_not_found       409 key_revoked (rotate of a revoked key)
+    404 request_not_found (feedback)           401 metrics_unauthorized (METRICS_TOKEN set)
+    404 not_found (no such route)              405 method_not_allowed
     Tenant portal (/app/api): 401 not_signed_in / session_expired / invalid_credentials,
     409 email_taken, 403 cross_origin, 415 unsupported_media_type
 """
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.config import get_settings
 from app.observability.logging import note_error
 
 log = structlog.get_logger()
@@ -41,6 +48,20 @@ class ApiError(Exception):
         self.code = code
         self.message = message
         self.headers = headers or {}
+
+
+# Codes for errors Starlette raises itself (no route, wrong method, the body cap below). Any other status
+# gets its HTTP reason phrase in snake_case. 413 is spelled out: its phrase differs across Pythons.
+_HTTP_CODES = {404: "not_found", 405: "method_not_allowed", 413: "content_too_large"}
+
+
+def _http_code(status: int) -> str:
+    if status in _HTTP_CODES:
+        return _HTTP_CODES[status]
+    try:
+        return HTTPStatus(status).phrase.lower().replace(" ", "_").replace("-", "_")
+    except ValueError:
+        return "http_error"
 
 
 def _request_id(request: Request) -> str | None:
@@ -65,12 +86,33 @@ def install_error_handlers(app: FastAPI) -> None:
             headers=headers,
         )
 
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        code = _http_code(exc.status_code)
+        note_error(request, code)
+        if exc.status_code == 404:
+            message = f"no route {request.method} {request.url.path}"
+        elif exc.status_code == 405:
+            message = f"{request.method} is not allowed on {request.url.path}"
+        else:
+            message = str(exc.detail)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=_body(request, code, message),
+            headers=exc.headers,  # e.g. Allow on a 405
+        )
+
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         first = exc.errors()[0] if exc.errors() else {}
-        loc = ".".join(str(p) for p in first.get("loc", []) if p != "body")
-        msg = first.get("msg", "invalid request")
-        message = f"{loc}: {msg}" if loc else msg
+        # For unparseable JSON, loc is a character offset and msg a bare "JSON decode error".
+        if first.get("type") == "json_invalid":
+            detail = first.get("ctx", {}).get("error")
+            message = f"invalid JSON body ({detail})" if detail else "invalid JSON body"
+        else:
+            loc = ".".join(str(p) for p in first.get("loc", []) if p != "body")
+            msg = first.get("msg", "invalid request")
+            message = f"{loc}: {msg}" if loc else msg
         note_error(request, "validation_error")
         return JSONResponse(status_code=422, content=_body(request, "validation_error", message))
 
@@ -83,3 +125,53 @@ def install_error_handlers(app: FastAPI) -> None:
             content=_body(request, "internal_error", "internal error"),
             headers={"X-Request-ID": _request_id(request) or ""},
         )
+
+
+class _BodyTooLarge(HTTPException):
+    def __init__(self, limit: int) -> None:
+        super().__init__(413, f"request body is larger than {limit} bytes")
+
+
+class BodySizeLimitMiddleware:
+    """Refuse request bodies over MAX_REQUEST_BYTES with 413 content_too_large.
+
+    A declared Content-Length over the cap is refused before anything is read. A body without one
+    (chunked) or that lies about it is counted as it is read, and reading stops at the cap: the
+    receive wrapper raises a FastAPI HTTPException, which the route's body parsing re-raises as is
+    and the StarletteHTTPException handler above turns into the envelope.
+
+    Pure ASGI rather than BaseHTTPMiddleware, so the body is never buffered here; it sits inside
+    RequestContextMiddleware, so the 413 carries the request id.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        limit = get_settings().max_request_bytes
+        declared = dict(scope["headers"]).get(b"content-length")
+        if declared is not None and declared.isdigit() and int(declared) > limit:
+            request = Request(scope)
+            note_error(request, "content_too_large")
+            response = JSONResponse(
+                status_code=413,
+                content=_body(request, "content_too_large", _BodyTooLarge(limit).detail),
+            )
+            await response(scope, receive, send)
+            return
+
+        received = 0
+
+        async def capped_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    raise _BodyTooLarge(limit)
+            return message
+
+        await self.app(scope, capped_receive, send)

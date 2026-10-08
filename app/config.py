@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     quality_judge_model: str | None = None  # defaults to DEFAULT_MODEL
     quality_judge_min_interval_s: float = 6.0
 
+    # Largest request body accepted, in bytes (413 content_too_large above it). The largest plan
+    # summarises up to 600k characters (enterprise map_reduce_max_chars); as JSON that is at most
+    # 6 bytes per character (\uXXXX escapes), so 4 MB leaves room without letting 40 MB in.
+    max_request_bytes: int = 4_000_000
+
     # URL fetching
     fetch_timeout_s: float = 10.0
     fetch_max_bytes: int = 2_000_000

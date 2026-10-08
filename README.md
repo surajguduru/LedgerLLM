@@ -142,7 +142,9 @@ Headers on every response: `X-Request-ID`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 Errors always look like `{"error": {"code": "…", "message": "…", "request_id": "…"}}` with stable codes:
 `401 missing_api_key | invalid_api_key` · `403 tenant_suspended | model_not_allowed` · `429 rate_limited` ·
 `402 budget_exceeded` · `400 blocked_input | fetch_blocked` · `422 fetch_failed | validation_error` ·
-`409 idempotency_conflict` · `502 upstream_error`.
+`409 idempotency_conflict | idempotency_in_progress` · `404 request_not_found` (feedback) ·
+`413 content_too_large` (body over `MAX_REQUEST_BYTES`, default 4 MB) · `404 not_found` (no such route) ·
+`405 method_not_allowed` · `502 upstream_error`.
 
 ## Tenant portal
 
@@ -532,7 +534,7 @@ Docker image (`Dockerfile`) deployed as a Render web service via `render.yaml`, 
 (step-by-step runbook: [`docs/DEPLOY.md`](docs/DEPLOY.md)).
 Configuration is entirely environment variables: `DATABASE_URL`, `LLM_PROVIDER`, `LLM_API_KEY`,
 `ADMIN_TOKEN`, `GUARDRAILS_MODE`, `GUARDRAIL_LLM`, `QUALITY_SAMPLE_RATE`, `SUMMARIZE_PROMPT_VERSION`,
-`RESPONSE_CACHE_ENABLED`. Merges to `main` deploy automatically once CI
+`RESPONSE_CACHE_ENABLED`, `MAX_REQUEST_BYTES`. Merges to `main` deploy automatically once CI
 and both eval gates pass. The app is stateless, so it scales horizontally without changes.
 
 ## Repository layout
