@@ -304,7 +304,7 @@ arithmetic**; only output *length* is synthetic.
 | End-to-end latency p50 / p99 (real model) | *pending* — needs a Gemini key | p50 ≤ 3 s, p99 ≤ 8 s | `latency_sample.py`, 30 paced requests at three sizes. Script verified against the mock |
 | Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 2 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` (Thrishal) |
 | Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %**; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier (Thrishal) |
-| Summarization faithfulness / coverage (LLM judge, 1–5) | *pending* | ≥ 4.0 / ≥ 3.5 | `make eval-summ PROVIDER=gemini` — awaiting the golden set and judge (Sai) |
+| Summarization faithfulness / coverage (LLM judge, 1–5) | *not a quality number yet* — the 8 Oct Gemini run scored **1 of 3** cases (faithfulness 5, coverage 5, key-point hit rate 1.00) and **failed its gate by design**: judge error rate 0.67 > 0.10 after free-tier 503/429s exhausted the back-off | ≥ 4.0 / ≥ 3.5 | `make eval-summ PROVIDER=gemini` → `evals/summarization/results/last_gemini.json`. A run that could not score its cases must not pass — rerun when the quota resets (Sai) |
 
 Traffic-control micro-benchmarks (Suraj): rate-limit check p50 747 µs / p99 1,404 µs on Postgres;
 fixed-window edge burst measured at exactly the 2.0× rpm bound D3 accepts; image 460 MB; local cold
