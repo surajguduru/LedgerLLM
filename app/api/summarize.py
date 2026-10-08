@@ -47,7 +47,15 @@ from app.guardrails import rules_version
 from app.guardrails.input import classify_input
 from app.guardrails.output import moderate_output
 from app.guardrails.types import PASS, GuardrailVerdict
-from app.llm import ProviderError, estimate_tokens, fallback_model, get_provider
+from app.llm import (
+    ProviderError,
+    estimate_tokens,
+    fallback_model,
+    get_provider,
+    model_available,
+    model_provider,
+    reasoning_allowance,
+)
 from app.models import BudgetPeriod
 from app.observability import metrics
 from app.plans import load_plans, microusd_to_usd
@@ -346,6 +354,20 @@ def _pipeline(
             audit_type=audit_events.MODEL_NOT_ALLOWED,
             details={"model": model, "plan": plan.name},
         )
+    if not model_available(model):
+        # On the plan, but its provider has no key on this deployment (D26): refuse before any budget
+        # is reserved or page fetched, rather than fail at the provider.
+        raise _fail(
+            db,
+            status=403,
+            code="model_not_allowed",
+            message=f"model '{model}' is not available on this deployment",
+            request_id=request_id,
+            auth=auth,
+            latency_ms=elapsed(),
+            audit_type=audit_events.MODEL_NOT_ALLOWED,
+            details={"model": model, "plan": plan.name, "provider": model_provider(model)},
+        )
     if payload.url:
         try:
             page = fetch_url(str(payload.url), settings)
@@ -496,6 +518,15 @@ def _pipeline(
         return body
 
     # 5. estimate + reserve budget -------------------------------------------------------------
+    # Fallback chain (D19): only to a model on the tenant's plan, and the reservation covers the
+    # priciest model that may answer, so settling can never exceed it. Every map-reduce call may
+    # fall back on its own, so one reservation covers the sum of the per-call worst cases (D20).
+    fallback = fallback_model()
+    allow_fallback = fallback is not None and fallback != model and fallback in plan.allowed_models
+    chain = [model, fallback] if allow_fallback else [model]
+    # Reasoning models spend hidden tokens before the visible summary; every call gets the largest
+    # headroom any model in the chain needs, and the reservation covers it (D26).
+    reasoning = max(reasoning_allowance(m) for m in chain)
     mr_plan = None
     if strategy == "map_reduce":
         mr_plan = plan_map_reduce(
@@ -505,6 +536,7 @@ def _pipeline(
             style=payload.style,
             max_words=payload.max_words,
             instructions=payload.instructions,
+            reasoning_tokens=reasoning,
         )
         calls = [(c.est_input_tokens, c.max_tokens) for c in mr_plan.calls]
     else:
@@ -515,14 +547,8 @@ def _pipeline(
             max_words=payload.max_words,
             instructions=payload.instructions,
         )
-        max_tokens = output_token_cap(prompt, payload.max_words)
+        max_tokens = output_token_cap(prompt, payload.max_words, reasoning_tokens=reasoning)
         calls = [(estimate_tokens(prompt.system) + estimate_tokens(user_prompt), max_tokens)]
-    # Fallback chain (D19): only to a model on the tenant's plan, and the reservation covers the
-    # priciest model that may answer, so settling can never exceed it. Every map-reduce call may
-    # fall back on its own, so one reservation covers the sum of the per-call worst cases (D20).
-    fallback = fallback_model()
-    allow_fallback = fallback is not None and fallback != model and fallback in plan.allowed_models
-    chain = [model, fallback] if allow_fallback else [model]
     est_microusd = sum(
         max(estimate_cost_microusd(m, est_in, cap) for m in chain) for est_in, cap in calls
     )

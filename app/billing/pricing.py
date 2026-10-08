@@ -14,6 +14,10 @@ from app.config import get_settings
 class ModelPrice:
     input_usd_per_mtok: float
     output_usd_per_mtok: float
+    # Which provider serves the model (app/llm/router.py, D26); None: LLM_PROVIDER.
+    provider: str | None = None
+    # Hidden-reasoning headroom added to the output cap of a reasoning model (D26).
+    reasoning_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -36,7 +40,12 @@ def load_prices() -> PriceTable:
     return PriceTable(
         version=str(raw["version"]),
         models={
-            name: ModelPrice(float(p["input_usd_per_mtok"]), float(p["output_usd_per_mtok"]))
+            name: ModelPrice(
+                float(p["input_usd_per_mtok"]),
+                float(p["output_usd_per_mtok"]),
+                p.get("provider"),
+                int(p.get("reasoning_tokens", 0)),
+            )
             for name, p in raw["models"].items()
         },
     )

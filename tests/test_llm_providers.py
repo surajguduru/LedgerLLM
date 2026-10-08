@@ -159,7 +159,8 @@ def test_get_provider_threads_reasoning_effort_setting(monkeypatch, env, expecte
     get_settings.cache_clear()
     get_provider.cache_clear()
     try:
-        assert get_provider().reasoning_effort == expected
+        # the configured provider sits behind the model router (D26) as its default
+        assert get_provider().default.reasoning_effort == expected
     finally:
         monkeypatch.undo()
         get_settings.cache_clear()

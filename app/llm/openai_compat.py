@@ -40,6 +40,12 @@ PRESETS: dict[str, str] = {
 # their non-reasoning models reject the parameter.
 REASONING_EFFORT_DEFAULTS: dict[str, str] = {"gemini": "low"}
 
+# Per-model default, by model-name prefix, used when the preset sends nothing and nobody chose a value.
+# gpt-oss on Groq reasons at "medium" unless told otherwise, and on a short summary its hidden reasoning
+# uses the whole max_tokens before any visible text (measured 8 Oct: empty reply at max_words 40). The
+# summary eval already judges with gpt-oss at "low" for the same reason (D21).
+MODEL_REASONING_EFFORT_DEFAULTS: dict[str, str] = {"openai/gpt-oss-": "low"}
+
 _PRESET_DEFAULT = object()
 
 
@@ -58,6 +64,11 @@ class OpenAICompatibleProvider:
     ) -> None:
         """`reasoning_effort` left unset uses the preset default; None or "" sends nothing."""
         self.name = name
+        # Only an unset value falls through to the per-model default; an explicit None or "" means
+        # "send nothing" and is kept.
+        self._effort_unset = (
+            reasoning_effort is _PRESET_DEFAULT and name not in REASONING_EFFORT_DEFAULTS
+        )
         if reasoning_effort is _PRESET_DEFAULT:
             reasoning_effort = REASONING_EFFORT_DEFAULTS.get(name)
         self.reasoning_effort = str(reasoning_effort) if reasoning_effort else None
@@ -82,8 +93,13 @@ class OpenAICompatibleProvider:
             "max_tokens": max_tokens,
             "temperature": 0.2,
         }
-        if self.reasoning_effort:
-            payload["reasoning_effort"] = self.reasoning_effort
+        effort = self.reasoning_effort
+        if effort is None and self._effort_unset:
+            effort = next(
+                (e for p, e in MODEL_REASONING_EFFORT_DEFAULTS.items() if model.startswith(p)), None
+            )
+        if effort:
+            payload["reasoning_effort"] = effort
         if response_format is not None:
             payload["response_format"] = response_format
         t0 = perf_counter()

@@ -177,7 +177,7 @@ def test_fallback_is_off_by_default(env):
 
     env(LLM_PROVIDER="gemini", LLM_API_KEY="k")
     assert fallback_model() is None
-    assert isinstance(get_provider(), OpenAICompatibleProvider)
+    assert isinstance(get_provider().default, OpenAICompatibleProvider)  # behind the router (D26)
 
 
 def test_same_provider_fallback_reuses_the_primary_key(env):
@@ -194,7 +194,7 @@ def test_same_provider_fallback_reuses_the_primary_key(env):
     chain = get_provider()
     assert isinstance(chain, FallbackProvider) and fallback_model() == SECONDARY
     assert chain.secondary._headers["Authorization"] == "Bearer k"
-    assert chain.primary._client.timeout.read == 0.5
+    assert chain.primary.default._client.timeout.read == 0.5
     assert chain.secondary._client.timeout.read == 20
 
 
@@ -215,7 +215,7 @@ def test_other_provider_fallback_needs_its_own_key(env):
     assert chain.secondary.name == "groq"
     assert chain.secondary._headers["Authorization"] == "Bearer g"
     assert chain.secondary.reasoning_effort is None  # the Gemini override is not sent to Groq
-    assert chain.primary.reasoning_effort == "medium"
+    assert chain.primary.default.reasoning_effort == "medium"
 
 
 def test_fallback_provider_without_a_model_is_a_config_error(env):
