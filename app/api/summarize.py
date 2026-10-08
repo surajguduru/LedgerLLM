@@ -324,6 +324,7 @@ def _pipeline(
         )
     page.text, omitted = truncate_head_tail(page.text, plan.max_input_chars)
     truncated = omitted > 0
+    strategy = "head_tail" if truncated else "full"
 
     # 4½. response cache (owner: Suraj) — a hit costs nothing and skips the budget entirely (D16)
     prompt = load_prompt(settings.summarize_prompt_version)
@@ -360,7 +361,11 @@ def _pipeline(
             request_id=request_id,
             summary=cached.text,
             source=SourceInfo(
-                url=page.url, title=page.title, chars=len(page.text), truncated=truncated
+                url=page.url,
+                title=page.title,
+                chars=len(page.text),
+                truncated=truncated,
+                strategy=strategy,
             ),
             usage=UsageInfo(
                 model=cached.model,
@@ -588,7 +593,11 @@ def _pipeline(
         request_id=request_id,
         summary=summary_text,
         source=SourceInfo(
-            url=page.url, title=page.title, chars=len(page.text), truncated=truncated
+            url=page.url,
+            title=page.title,
+            chars=len(page.text),
+            truncated=truncated,
+            strategy=strategy,
         ),
         usage=UsageInfo(
             model=answered,

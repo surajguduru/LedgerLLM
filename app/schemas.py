@@ -33,8 +33,11 @@ class SummarizeRequest(BaseModel):
 class SourceInfo(BaseModel):
     url: str | None
     title: str
-    chars: int
-    truncated: bool
+    chars: int  # characters the summary was made from
+    truncated: bool  # True when part of the document was left out
+    # full: the whole text in one call · head_tail: head and tail kept, middle omitted ·
+    # map_reduce: summarised in chunks, then the chunk summaries summarised (D20)
+    strategy: Literal["full", "head_tail", "map_reduce"] = "full"
 
 
 class UsageInfo(BaseModel):
