@@ -37,6 +37,9 @@ display:grid;place-items:center;color:#fff;font-size:14px;font-weight:800}
 .nav a:hover{background:var(--bg);color:var(--ink);text-decoration:none}
 .nav a.on{color:var(--ink);background:var(--bg)}
 .who{margin-left:auto;display:flex;align-items:center;gap:12px;color:var(--muted);font-size:.9rem}
+.nav a,.who .btn,.brand{white-space:nowrap}
+.nav{min-width:0;overflow-x:auto;scrollbar-width:none}
+@media (max-width:860px){.top-in{gap:14px;padding:0 16px}#who{display:none}.nav a{padding:6px 8px}main{padding:24px 16px 48px}}
 main{max-width:1120px;margin:0 auto;padding:32px 24px 64px}
 .head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:24px}
 h1{font-size:1.6rem;letter-spacing:-.02em;margin:0} h2{font-size:1.05rem;margin:0 0 4px}
@@ -92,21 +95,37 @@ background:radial-gradient(60rem 30rem at 10% -10%,var(--accent-soft),transparen
 .seg{display:inline-flex;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:3px;gap:2px}
 .seg button{border:0;background:transparent;color:var(--muted);font:inherit;font-weight:600;font-size:.85rem;
 padding:6px 12px;border-radius:7px;cursor:pointer}
+#style button{flex:1}
 .seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(16,24,40,.08)}
-.play{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);align-items:start}
+.play{grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);align-items:stretch}
+.stack{display:flex;flex-direction:column;gap:16px;min-width:0}
 @media (max-width:960px){.play{grid-template-columns:1fr}}
-.field{margin-top:16px} .field:first-child{margin-top:0}
+.field{margin-top:20px} form>.field:first-child,form>.row2:first-child{margin-top:0}
 .field label{margin:0 0 6px;display:flex;justify-content:space-between;align-items:baseline}
 .field label small{color:var(--muted);font-weight:400}
-.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px;align-items:start}
+.row2>.field{margin-top:0}
+@media (max-width:560px){.row2{grid-template-columns:1fr}.row2>.field+.field{margin-top:20px}.result{min-height:260px}}
+.hint{display:block;font-size:.78rem;color:var(--muted);margin-top:6px}
 textarea{width:100%;font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;
 padding:10px 12px;outline:none;resize:vertical;min-height:180px;line-height:1.5}
 textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 .field select,.field input[type=text],.field input[type=url]{width:100%}
-input[type=range]{width:100%;accent-color:var(--accent);padding:0;border:0;box-shadow:none}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;margin:14px 0 8px;padding:0;border:0;
+border-radius:999px;background:var(--line);box-shadow:none;cursor:pointer}
+input[type=range]:focus{box-shadow:0 0 0 3px var(--accent-soft)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;
+background:var(--accent);border:3px solid var(--surface);box-shadow:0 0 0 1px var(--accent)}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);
+border:3px solid var(--surface);box-shadow:0 0 0 1px var(--accent)}
 .check{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:.88rem;margin:0}
-.check input{width:auto;padding:0;box-shadow:none}
-.result{min-height:420px;display:flex;flex-direction:column}
+.check input{-webkit-appearance:none;appearance:none;width:18px;height:18px;padding:0;margin:0;flex:none;
+border:1.5px solid var(--muted);border-radius:5px;background:var(--surface);cursor:pointer;display:grid;place-items:center}
+.check input:checked{background:var(--accent);border-color:var(--accent)}
+.check input:checked::after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg)}
+.check input:focus-visible{box-shadow:0 0 0 3px var(--accent-soft)}
+.check{cursor:pointer}
+.result{flex:1;min-height:420px;display:flex;flex-direction:column}
 .placeholder{flex:1;display:grid;place-items:center;text-align:center;color:var(--muted);padding:40px 20px}
 .summary{font-size:1rem;line-height:1.65} .summary ul{padding-left:20px;margin:8px 0} .summary li{margin:4px 0}
 .summary p{margin:0 0 10px}
@@ -395,27 +414,27 @@ Rate limits, budget, guardrails and caching apply, and every call is billed to t
 <div class="grid play">
  <form class="card" id="form">
   <div class="row2">
-   <div class="field"><label for="key">API key</label><select id="key"></select><small class="sub" style="display:block;font-size:.78rem;margin-top:6px">usage is billed to this key</small></div>
-   <div class="field"><label for="model">Model</label><select id="model"></select><small class="sub" id="price" style="display:block;font-size:.78rem;margin-top:6px"></small></div>
+   <div class="field"><label for="key">API key</label><select id="key"></select><small class="hint">Usage is billed to this key</small></div>
+   <div class="field"><label for="model">Model</label><select id="model"></select><small class="hint" id="price">&nbsp;</small></div>
   </div>
   <div class="field"><label>Source <span class="seg" id="src"><button type="button" data-v="text" class="on">Text</button><button type="button" data-v="url">URL</button></span></label>
    <textarea id="text" placeholder="Paste an article, a report, meeting notes…"></textarea>
    <input id="url" type="url" placeholder="https://en.wikipedia.org/wiki/Token_bucket" style="display:none;width:100%">
-   <div style="margin-top:6px;display:flex;justify-content:space-between"><a href="#" id="sample" style="font-size:.85rem">Use a sample text</a><small class="sub" id="chars"></small></div></div>
+   <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center"><a href="#" id="sample" style="font-size:.85rem">Use a sample text</a><small class="hint" id="chars" style="margin:0"></small></div></div>
   <div class="row2">
-   <div class="field"><label>Style</label><span class="seg" id="style"><button type="button" data-v="bullets" class="on">Bullets</button><button type="button" data-v="paragraph">Paragraph</button><button type="button" data-v="tldr">TL;DR</button></span></div>
+   <div class="field"><label>Style</label><span class="seg" id="style" style="display:flex;width:100%"><button type="button" data-v="bullets" class="on">Bullets</button><button type="button" data-v="paragraph">Paragraph</button><button type="button" data-v="tldr">TL;DR</button></span></div>
    <div class="field"><label for="words">Max words <small id="words-v">150</small></label><input id="words" type="range" min="20" max="600" step="10" value="150"></div>
   </div>
   <div class="field"><label for="instructions">Instructions <small>optional</small></label>
    <input id="instructions" type="text" maxlength="500" placeholder="e.g. focus on pricing changes"></div>
-  <div class="field" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+  <div class="field" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-top:20px;border-top:1px solid var(--line)">
    <label class="check"><input type="checkbox" id="bypass"> Bypass cache</label>
    <button class="btn primary" id="run" type="submit" style="min-width:140px">Summarize</button></div>
  </form>
- <div>
+ <div class="stack">
   <div class="card result" id="result"><div class="placeholder"><div><div style="font-size:2rem">✨</div>
    <p style="margin:6px 0 0">Your summary will appear here.</p><p class="sub" style="font-size:.85rem">Pick a key and a model, add some text or a URL, then press Summarize.</p></div></div></div>
-  <div class="card section" id="hist-card" style="display:none"><h2>This session</h2>
+  <div class="card" id="hist-card" style="display:none"><h2>This session</h2>
    <table class="history"><thead><tr><th>When</th><th>Model</th><th>Key</th><th class="num">Tokens</th><th class="num">Cost</th></tr></thead><tbody id="hist"></tbody></table></div>
  </div>
 </div>"""
@@ -434,11 +453,13 @@ function seg(id, onChange) {
 }
 seg('#src', v => { $('#text').style.display = v === 'text' ? '' : 'none'; $('#url').style.display = v === 'url' ? '' : 'none'; $('#sample').style.visibility = v === 'text' ? 'visible' : 'hidden'; $('#chars').textContent = ''; });
 seg('#style');
-$('#words').oninput = () => $('#words-v').textContent = $('#words').value;
+const fill = () => { const w = $('#words'), pct = 100 * (w.value - w.min) / (w.max - w.min);
+  w.style.background = `linear-gradient(to right, var(--accent) ${pct}%, var(--line) ${pct}%)`; $('#words-v').textContent = w.value; };
+$('#words').oninput = fill; fill();
 $('#text').oninput = () => $('#chars').textContent = $('#text').value.length ? int($('#text').value.length) + ' characters' : '';
 $('#sample').onclick = (e) => { e.preventDefault(); $('#text').value = SAMPLE.replace(/\n/g, ' '); $('#text').oninput(); };
 $('#model').onchange = () => { const m = models[$('#model').value];
-  $('#price').textContent = m ? `$${m.input_usd_per_mtok} in · $${m.output_usd_per_mtok} out per 1M tokens` : ''; };
+  $('#price').textContent = m ? `${usd(m.input_usd_per_mtok, 2)} in · ${usd(m.output_usd_per_mtok, 2)} out per 1M tokens` : ''; };
 function renderSummary(text) {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length && lines.every(l => /^[-*•]\s/.test(l))) return '<ul>' + lines.map(l => `<li>${esc(l.replace(/^[-*•]\s+/, ''))}</li>`).join('') + '</ul>';
