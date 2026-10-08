@@ -1,15 +1,28 @@
-"""Fetch a URL and extract its main text.
+"""Fetch a URL and extract its main text, without letting the URL reach internal resources.
 
-OWNER: Sai. Base ships a plain fetch + trafilatura extraction. Sai owns:
-- SSRF guard: reject non-http(s) schemes, resolve the host and refuse loopback / private / link-local /
-  cloud-metadata (169.254.169.254) addresses, re-check on every redirect hop, cap redirects at 3.
-  Raise ApiError(400, "fetch_blocked", ...) — see tests/test_fetch.py (xfail).
-- Truncation strategy for long pages (head + tail, or map-reduce as a stretch goal).
-- Content-type handling (PDF via pypdf is a stretch goal).
+`POST /v1/summarize` accepts a `url`, so any tenant can make this server send a GET request.
+Left alone that is server-side request forgery (SSRF): `http://169.254.169.254/` reads cloud
+metadata credentials, `http://127.0.0.1:8000/admin` reaches our own admin API, `http://10.0.0.1/`
+reaches the private network. `validate_url` is the guard:
+
+- the scheme must be http or https, the URL must carry no credentials and must name a host;
+- the host is resolved with `socket.getaddrinfo`, and the URL is refused if *any* resolved
+  address is not globally routable (`ip.is_global` covers private, loopback, link-local, CGNAT
+  100.64/10, reserved, unspecified and fd00::/8), is multicast, or is the metadata address.
+  IPv4-mapped IPv6 (`::ffff:127.0.0.1`) is unwrapped first. Numeric host spellings such as
+  `2130706433`, `0x7f.0.0.1` and `127.1` need no special case: they resolve to loopback.
+
+Refusals raise `FetchBlocked` (400 `fetch_blocked`); a name that does not resolve is an ordinary
+`FetchError` (422 `fetch_failed`). Messages say why without naming the resolved address.
+
+OWNER: Sai. Still to do: truncation strategy for long pages (head + tail, map-reduce as a stretch
+goal); content-type handling (PDF via pypdf is a stretch goal).
 """
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 from dataclasses import dataclass
 from time import perf_counter
 
@@ -18,9 +31,20 @@ import trafilatura
 
 from app.config import Settings
 
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+ALLOWED_SCHEMES = frozenset({"http", "https"})
+DEFAULT_PORTS = {"http": 80, "https": 443}
+# Link-local, so is_global already refuses it; named explicitly because it is the one that matters.
+METADATA_ADDRESS = ipaddress.IPv4Address("169.254.169.254")
+
 
 class FetchError(Exception):
     pass
+
+
+class FetchBlocked(FetchError):
+    """The URL is refused by policy (scheme, credentials or a non-public address), not by failure."""
 
 
 @dataclass
@@ -31,6 +55,45 @@ class FetchedPage:
     text: str
     content_type: str | None
     fetched_ms: int
+
+
+def _is_forbidden(ip: IPAddress) -> bool:
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip == METADATA_ADDRESS or ip.is_multicast or not ip.is_global
+
+
+def _resolve(host: str, port: int) -> list[IPAddress]:
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError) as exc:
+        raise FetchError("could not resolve the URL's host") from exc
+    # sockaddr[0] is the address; an IPv6 one may carry a "%scope" suffix.
+    return [ipaddress.ip_address(str(info[4][0]).split("%", 1)[0]) for info in infos]
+
+
+def validate_url(url: str) -> list[IPAddress]:
+    """Return the addresses `url` resolves to, or raise FetchBlocked if fetching it is not allowed.
+
+    The URL is parsed with httpx, the library that will fetch it, so the guard and the client
+    cannot disagree about which host the URL names.
+    """
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL as exc:
+        raise FetchError("invalid URL") from exc
+    if parsed.scheme not in ALLOWED_SCHEMES:
+        raise FetchBlocked("only http and https URLs can be fetched")
+    if parsed.userinfo:
+        raise FetchBlocked("URLs with credentials are not allowed")
+    if not parsed.host:
+        raise FetchBlocked("URL has no host")
+    addresses = _resolve(parsed.host, parsed.port or DEFAULT_PORTS[parsed.scheme])
+    if not addresses:
+        raise FetchError("could not resolve the URL's host")
+    if any(_is_forbidden(ip) for ip in addresses):
+        raise FetchBlocked("URL resolves to a private, loopback or otherwise non-public address")
+    return addresses
 
 
 def _extract(html: str) -> tuple[str, str]:
@@ -44,6 +107,7 @@ def _extract(html: str) -> tuple[str, str]:
 
 def fetch_url(url: str, settings: Settings) -> FetchedPage:
     t0 = perf_counter()
+    validate_url(url)
     headers = {"User-Agent": "LedgerLLM/0.1 (+https://github.com/; summarizer bot)"}
     try:
         with httpx.Client(
