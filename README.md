@@ -2,6 +2,9 @@
 
 **A multi-tenant LLM API with per-tenant cost attribution, quotas, abuse protection and audit logging.**
 
+**Live:** <https://ledgerllm.onrender.com> — sign up at [`/app`](https://ledgerllm.onrender.com/app) for a free-plan key and the
+playground, or read the API at [`/docs`](https://ledgerllm.onrender.com/docs). It deploys from `main` once CI passes.
+
 The product feature is deliberately small: *summarize any URL or text*. Everything around that one
 LLM call is the point — the parts a SaaS vendor needs before selling an LLM feature to many customers:
 
@@ -136,7 +139,9 @@ Headers on every response: `X-Request-ID`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 | `GET /app` | **tenant portal**: sign up / sign in, manage API keys, usage per key, daily and monthly spend |
 | `/app/api/*` | portal JSON API (session cookie): `signup`, `login`, `logout`, `me`, `keys` (create, `/{id}/revoke`, `/{id}/rotate`), `models`, `playground/summarize`, `usage?period=`, `statement.csv`, `billing`, `billing/plan` |
 | `GET /dashboard` | usage/billing page for a tenant (paste a key) |
-| `POST /admin/tenants`, `POST /admin/tenants/{id}/keys`, `GET /admin/tenants` | tenant and key management (`Authorization: Bearer $ADMIN_TOKEN`) |
+| `GET`/`POST /admin/tenants`, `PATCH /admin/tenants/{id}` (plan, status, budget override) | tenant management (`Authorization: Bearer $ADMIN_TOKEN`) |
+| `GET`/`POST /admin/tenants/{id}/keys`, `POST /admin/keys/{id}/rotate`, `DELETE /admin/keys/{id}` | key management: list, create, rotate (once), revoke |
+| `GET /admin/audit`, `GET /admin/quality` | audit trail (filter by tenant / event type, cursor `before`); online judge scores per prompt version |
 | `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus (needs `Authorization: Bearer $METRICS_TOKEN` when set; 404 outside dev/test without it), health and deployed commit, OpenAPI |
 
 Errors always look like `{"error": {"code": "…", "message": "…", "request_id": "…"}}` with stable codes:
@@ -289,7 +294,7 @@ applies from the next request.
 | Burst of 50 concurrent requests, $0.004 budget | 4 admitted, 46 × 402; spent $0.002628 (66 % of limit), ledger total = spent, nothing left reserved | Postgres 16, mock provider with 50 ms latency, `python -m scripts.bench_billing burst` |
 | Same burst with *check `spent`, then call* (the design D2 rejects) | 10 admitted; spent $0.006570 = **164 % of the limit** | same |
 | Reservation pessimism (estimate ÷ actual) | median 1.43×, p95 1.84× | 9 requests, 3 styles × 50/150/300 words, ~3k-token document, mock token counts, `python -m scripts.bench_billing costs` |
-| Cost of a ~3k-token request at `gemini-3.8-flash` list price | $0.0027 actual, reserved $0.0031–$0.0050 depending on `max_words` | same; real-model output lengths pending a Gemini run |
+| Cost of a ~3k-token request at `gemini-3.8-flash` list price | $0.0027 actual, reserved $0.0031–$0.0050 depending on `max_words` | same; output lengths from the mock, priced at `gemini-3.8-flash` list price |
 | Guardrail share of spend | 0 % | `GUARDRAIL_LLM=off` (the default): heuristic guardrails make no model calls |
 
 The 34 % headroom in the burst row is the accepted cost of D2: the last requests that would have fit are refused
@@ -498,7 +503,7 @@ arithmetic**; only output *length* is synthetic.
 | Metric cardinality | **171 series**, of which only **18** carry a `tenant` label → **6 per tenant** | — | 3 tenants, 1 model, measured with Prometheus `count()`. Extrapolates to ~27,000 series at 1,000 tenants × 3 models — `DESIGN.md` §5 limit #4. The 85 `http_*` series are mostly the cost of widening the latency histogram from 3 to 14 buckets, without which neither latency target is measurable |
 | End-to-end latency p50 / max (real model, **partial**) | ~1k-token doc **6.6 s / 28.3 s** (n = 8) · ~2.3k-token doc **5.7 s / 13.2 s** (n = 4) · ~6k-token: no successful call; platform overhead p50 **57–94 ms** | p50 ≤ 3 s, p99 ≤ 8 s ❌ | `latency_sample.py`, Gemini 3.8 Flash **free tier**, 8 Oct; 18 of 30 calls refused by the provider's quota (recorded as failures, not retried). Model time is > 98 % of the total; the free tier's queueing dominates. Re-run on a paid key for a full sample |
 | End-to-end latency p50 / max (real model, Groq) | ~1k-token doc **0.50 s / 0.63 s** (n = 10) · ~2.3k **0.73 s / 1.54 s** (n = 10) · ~4.4k **0.82 s / 1.08 s** (n = 6); platform overhead p50 **64–133 ms** | p50 ≤ 3 s, p99 ≤ 8 s ✅ | `latency_sample.py`, `qwen/qwen3.8-27b` on Groq's **free tier**, 30 requests paced 20 s apart, 8 Oct; 26 of 30 succeeded, 4 long documents refused by the tokens-per-minute cap (recorded as failures, not retried). Same pipeline as the Gemini row: the difference between the two rows is the provider |
-| End-to-end latency p50 / p95 / p99 in **production** (Render + Neon, real Gemini) | **2,273 / 25,660 / 25,660 ms**; 3 of 15 requests over 8 s. Platform overhead p50 **~860 ms** (range 767–1,126 ms) | p50 ≤ 3 s ✅, p99 ≤ 8 s ❌, overhead p99 ≤ 25 ms ❌ | Exact percentiles over `request_logs` on the deployment, n = 15 successful calls, 8 Oct — at that n the p95 and p99 are both just the slowest call, so read them as "the tail reached 25 s", not as a stable percentile. The cause is **cross-region database round trips, not CPU**: the pipeline makes ~19 database calls per request, `render.yaml` pinned no region so Render defaulted to Oregon while Neon is in `aws-us-east-2` (Ohio), and 19 × ~50 ms RTT ≈ 950 ms matches the measured gap. DESIGN.md §5 limit #1 dominating in production while invisible locally. The fix (`region: ohio`) is in review and **the re-measurement is still owed** |
+| End-to-end latency p50 / p95 / p99 in **production** (Render + Neon, real Gemini) | **2,273 / 25,660 / 25,660 ms**; 3 of 15 requests over 8 s. Platform overhead p50 **~860 ms** (range 767–1,126 ms) | p50 ≤ 3 s ✅, p99 ≤ 8 s ❌, overhead p99 ≤ 25 ms ❌ | Exact percentiles over `request_logs` on the deployment, n = 15 successful calls, 8 Oct — at that n the p95 and p99 are both just the slowest call, so read them as "the tail reached 25 s", not as a stable percentile. The cause is **cross-region database round trips, not CPU**: the pipeline makes ~19 database calls per request, `render.yaml` pinned no region so Render defaulted to Oregon while Neon is in `aws-us-east-2` (Ohio), and 19 × ~50 ms RTT ≈ 950 ms matches the measured gap. DESIGN.md §5 limit #1 dominating in production while invisible locally. The fix (`region: ohio`) is merged and deployed; **the re-measurement is still owed** |
 | Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 1.5 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 65 benign (15 of them editorial instructions naming document regions), `GUARDRAIL_LLM=off` |
 | Red-team **held-out v1** (20 reworded attacks; used during rule development) | heuristics **5 %** before / 65 % after rules written against it; cascade with every instruction classified **90 %** (old rules) / **100 %** (new rules) | — | `evals/redteam/heldout.jsonl`; seen by the rules, so not a generalisation number |
 | Red-team **held-out v2** (20 unseen attacks + 10 benign look-alikes) | heuristics only: catch **0 %** (0/20), FPR **0 %** (0/10); cascade: pending a classifier run | — | `evals/redteam/heldout_v2.jsonl`, reported by `make eval-redteam`, never gated or tuned against. The regex layer does not generalise to unseen paraphrases; the LLM classifier is the layer for that |
@@ -509,7 +514,7 @@ Traffic-control micro-benchmarks: rate-limit check p50 747 µs / p99 1,404 µs o
 fixed-window edge burst measured at exactly the 2.0× rpm bound D3 accepts; image 460 MB; local cold
 start 1.1 s.
 
-**Not yet measured:** the burst against the deployment (needs a live URL and its `ADMIN_TOKEN`), and
+**Not yet measured:** the burst against the deployment (needs its `ADMIN_TOKEN` to set a test budget), and
 production latency *after* the region fix — the ~860 ms overhead row above is the before. Alert
 rules for these signals are in [`ops/alerts.yml`](ops/alerts.yml).
 

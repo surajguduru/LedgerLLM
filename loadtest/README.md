@@ -1,6 +1,6 @@
 # Load test and latency evidence
 
-Owner: Yashraj. Two separate measurements, deliberately not one (decision **D8**):
+Two separate measurements, deliberately not one (decision **D8**):
 
 | | Tool | Provider | Question it answers |
 |---|---|---|---|
@@ -20,10 +20,10 @@ nothing about our code. Real-provider latency is measured separately on a small 
 | Burst — **Postgres 16, `MOCK_LATENCY_MS=800`** | ✅ **done — HOLDS. This is the proof** |
 | Platform overhead — sequential, local | ✅ done, target met |
 | Burst — SQLite | ✅ done, kept below only as the contrast that shows the write lock |
-| Burst — Render deployment | ⬜ pending deployment (Suraj) |
-| Real-provider latency — Gemini | ⬜ pending (needs `LLM_API_KEY`) |
+| Burst — Render deployment | ⬜ not run yet (needs the deployment's `ADMIN_TOKEN` to set a test budget) |
+| Real-provider latency — Gemini free tier, Groq free tier, production | ✅ done — numbers in the README benchmarks table |
 
-> **8 Oct: the test had to be redesigned.** Suraj's rate limiter and response cache landed on `main`,
+> **8 Oct: the test had to be redesigned.** The rate limiter and response cache landed on `main`,
 > and between them they made the old burst test meaningless — it stopped producing a single 402. See
 > *Why one key and one document no longer works* below. Numbers on this page are from the new design.
 
@@ -163,7 +163,7 @@ exists for.
 which every concurrent request reads the same stale `spent` and all of them pass. The wider the
 window, the more requests slip through it.
 
-This is no longer a thought experiment: Naresh **implemented the rejected design and measured it**
+This is no longer a thought experiment: we **implemented the rejected design and measured it**
 (README, "Cost attribution & budgets"). On a $0.004 budget with 50 concurrent requests, check-then-call
 admitted 10 and spent **164 % of the limit**; the atomic reserve admitted 4 and spent 66 %, with the
 ledger total equal to spend and nothing left reserved. That is the counterfactual, measured rather
@@ -210,10 +210,11 @@ panel from steady traffic, not from a burst.
 
 ---
 
-## Result 3 — Real-provider latency ⬜ pending
+## Result 3 — Real-provider latency
 
 `latency_sample.py` with `LLM_PROVIDER=gemini`: 30 requests, 10 per size, 4.5 s apart to stay inside
 the free tier's per-minute limit. Reports end-to-end p50/p95/p99, model-only (`usage.latency_ms`) and
-the difference. Verified working against the mock; needs a Gemini key for the real numbers.
+the difference. Results (Gemini free tier, Groq free tier, and production on Render + Neon) are in the
+README benchmarks table; the free-tier quota refusals are recorded as failures, not retried.
 
 Target for a ~3k-token document: p50 ≤ 3 s, p99 ≤ 8 s.

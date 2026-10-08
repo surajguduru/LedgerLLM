@@ -1,6 +1,6 @@
 # Measurements, trade-offs, failure modes
 
-Add yours as soon as you have it. Yashraj copies final values into the README benchmarks table.
+A dated log of every measurement; final values are copied into the README benchmarks table.
 Format: **what** · value · conditions · command · date · who.
 
 ## Numbers
