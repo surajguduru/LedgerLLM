@@ -1,14 +1,24 @@
-"""Loads versioned prompt artifacts from prompts/*.yaml. Rendering never uses str.format on untrusted text."""
+"""Loads versioned prompt artifacts from prompts/*.yaml and renders the user prompt.
+
+Rendering is one regex pass over the template: each known placeholder is
+replaced by its value, and inserted values are never scanned again. Replacing
+placeholders one after another (or using `str.format`) would let user-controlled
+text that contains a placeholder, e.g. `instructions="{text}"`, be expanded by a
+later step.
+"""
 
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 
 import yaml
 
 from app.config import get_settings
+
+_PLACEHOLDER = re.compile(r"\{(style|max_words|instructions_block|title|source|text)\}")
 
 
 @dataclass(frozen=True)
@@ -33,17 +43,15 @@ class PromptSpec:
         instructions_block = (
             f"Additional focus requested by the user: {instructions}" if instructions else ""
         )
-        out = self.user_template
-        for key, value in {
-            "{style}": self.styles.get(style, style),
-            "{max_words}": str(max_words),
-            "{instructions_block}": instructions_block,
-            "{title}": title.replace('"', "'"),
-            "{source}": source.replace('"', "'"),
-            "{text}": text,  # last, so braces inside the document are never re-interpreted
-        }.items():
-            out = out.replace(key, value)
-        return out
+        values = {
+            "style": self.styles.get(style, style),
+            "max_words": str(max_words),
+            "instructions_block": instructions_block,
+            "title": title.replace('"', "'"),
+            "source": source.replace('"', "'"),
+            "text": text,
+        }
+        return _PLACEHOLDER.sub(lambda m: values[m.group(1)], self.user_template)
 
 
 @lru_cache
