@@ -144,10 +144,10 @@ JS = """
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const usd = (n, dp) => {
-  n = Number(n || 0); dp = dp ?? (n !== 0 && Math.abs(n) < 0.01 ? 6 : 2);
-  return '$' + n.toLocaleString(undefined, {minimumFractionDigits: dp, maximumFractionDigits: dp});
-};
+// Cents when the amount is whole cents, else up to micro-USD (the ledger's unit): $0.499601 left of
+// $0.50 must not round back to $0.50 after a few sub-cent requests.
+const usd = (n, dp) => '$' + Number(n || 0).toLocaleString(undefined,
+  {minimumFractionDigits: dp ?? 2, maximumFractionDigits: dp ?? 6});
 const int = (n) => Number(n || 0).toLocaleString();
 const ago = (iso) => {
   if (!iso) return 'never';
