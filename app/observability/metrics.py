@@ -34,6 +34,12 @@ FEEDBACK = Counter("ledgerllm_feedback_total", "Thumbs up/down", ["rating"])
 CACHE = Counter(
     "ledgerllm_cache_total", "Response cache lookups", ["result"]
 )  # hit | miss | bypass
+QUALITY_SCORE = Histogram(
+    "ledgerllm_quality_score",
+    "Online LLM-judge score (1-5) of sampled live summaries",
+    ["prompt_version", "dimension"],  # dimension: faithfulness | coverage
+    buckets=(1, 2, 3, 4, 5),
+)
 UPSTREAM_ERRORS = Counter(
     "ledgerllm_upstream_errors_total", "Provider errors", ["model", "retryable"]
 )

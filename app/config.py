@@ -51,6 +51,16 @@ class Settings(BaseSettings):
 
     # Guardrails: enforce | shadow | off
     guardrails_mode: str = "enforce"
+    # Second detection layer: on | off. Off for tests and load tests; the model must be in prices.yaml.
+    guardrail_llm: str = "off"
+    guardrail_llm_model: str = "gemini-3.5-flash-lite"
+    guardrail_llm_cache_size: int = 4096
+
+    # Online quality sampling: share of successful summaries judged in the background (0 disables).
+    # The judge runs on the platform's key and is paced for the Gemini free tier (~10 RPM).
+    quality_sample_rate: float = 0.05
+    quality_judge_model: str | None = None  # defaults to DEFAULT_MODEL
+    quality_judge_min_interval_s: float = 6.0
 
     # URL fetching
     fetch_timeout_s: float = 10.0

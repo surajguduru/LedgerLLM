@@ -502,18 +502,31 @@ def _pipeline(
     # 6. input guardrail -----------------------------------------------------------------------
     mode = settings.guardrails_mode
     verdict_in = PASS
+    guardrail_cost = 0
     if mode != "off":
+        # Instructions first, then the document. Each verdict is booked on its own: either may
+        # have consulted the paid classifier, and the one that is reported is the stronger one.
         verdict_in = classify_input(payload.instructions or "", source="instructions")
+        guardrail_cost += _book_guardrail(
+            db,
+            verdict=verdict_in,
+            auth=auth,
+            request_id=request_id,
+            period=decision.period,
+            stage="input",
+        )
         if not verdict_in.blocked:
-            verdict_in = classify_input(page.text, source="document")
-    guardrail_cost = _book_guardrail(
-        db,
-        verdict=verdict_in,
-        auth=auth,
-        request_id=request_id,
-        period=decision.period,
-        stage="input",
-    )
+            verdict_doc = classify_input(page.text, source="document")
+            guardrail_cost += _book_guardrail(
+                db,
+                verdict=verdict_doc,
+                auth=auth,
+                request_id=request_id,
+                period=decision.period,
+                stage="input",
+            )
+            if verdict_doc.score >= verdict_in.score:
+                verdict_in = verdict_doc
     if _run_guardrail(
         db, mode=mode, stage="input", verdict=verdict_in, auth=auth, request_id=request_id
     ):
@@ -588,7 +601,7 @@ def _pipeline(
     prompt_version = f"{prompt.version}@{prompt.content_hash}"
 
     # 8. output guardrail ----------------------------------------------------------------------
-    verdict_out = moderate_output(result.text) if mode != "off" else PASS
+    verdict_out = moderate_output(result.text, source_text=page.text) if mode != "off" else PASS
     guardrail_cost += _book_guardrail(
         db,
         verdict=verdict_out,
@@ -600,8 +613,10 @@ def _pipeline(
     withheld = _run_guardrail(
         db, mode=mode, stage="output", verdict=verdict_out, auth=auth, request_id=request_id
     )
-    summary_text = WITHHELD if withheld else result.text
+    summary_text = result.text
     if withheld:
+        # A verdict that supplies a redacted copy (pii_leak) is served instead of the placeholder.
+        summary_text = verdict_out.details.get("text") or WITHHELD
         audit(
             db,
             audit_events.OUTPUT_MODERATED,
