@@ -2,7 +2,7 @@
 
 import os
 
-os.environ["DATABASE_URL"] = "sqlite://"
+os.environ.setdefault("DATABASE_URL", "sqlite://")  # CI sets a Postgres URL
 os.environ["LLM_PROVIDER"] = "mock"
 os.environ["ADMIN_TOKEN"] = "test-admin"
 os.environ["APP_ENV"] = "test"
