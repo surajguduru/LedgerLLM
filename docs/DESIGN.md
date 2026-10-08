@@ -64,6 +64,25 @@ multi-region deployment. Stretch: PDF ingestion, semantic cache, Langfuse tracin
 | Load test | Locust | Python, scriptable assertions on status-code distribution |
 | Deployment | Docker → Render web service (`render.yaml`) + Neon Postgres | Free tier, public URL, environment-variable configuration, one-click redeploy of a previous build |
 
+**How the components talk to each other.** Everything outside the request pipeline (section 2.2), with the
+direction of the call, whether the caller waits, the protocol and the data format.
+
+| From → to | Sync / async | Interface | Data format | Failure handling |
+|---|---|---|---|---|
+| Client → API (`/v1/*`) | sync | REST over HTTPS, `X-API-Key` header | JSON (pydantic schemas); errors `{"error": {code, message, request_id}}` | HTTP status per section 6 |
+| Tenant browser → portal (`/app`) and dashboard (`/dashboard`) | sync | HTML + `fetch()` to the same API, HttpOnly session cookie | HTML, JSON; statement as CSV | session expiry → sign-in page |
+| Operator → admin API (`/admin/*`) | sync | REST, `Authorization: Bearer <ADMIN_TOKEN>` | JSON | 401 without the token; app refuses to start in production with the default |
+| API → Postgres | sync, in the request thread | SQLAlchemy 2 over psycopg (TCP) | SQL rows; money as BIGINT micro-USD | fail closed: no reservation → no model call → 500 |
+| API → LLM provider | sync, in the request thread | HTTPS `POST /chat/completions` (OpenAI-compatible) or the Anthropic SDK | JSON messages; token usage from the response | timeout / 429 / 5xx → one fallback model (D19) → 502, reservation released |
+| API → guardrail classifier | sync, only for uncertain inputs | same provider interface, 60-token JSON verdict | JSON `{injection, category, confidence}` | provider error → heuristic score decides (D15) |
+| API → online judge | **async**: in-process queue to one background thread | same provider interface | JSON `{faithfulness, coverage, issues}` → `quality_samples` row | error → sample dropped, logged; response never waits (D17) |
+| API → URL fetch | sync | HTTPS GET via `httpx`, SSRF-guarded, ≤ 2 MB, ≤ 10 s | HTML → text (`trafilatura`) | 400 `fetch_blocked` / 422 `fetch_failed`, nothing billed |
+| Prometheus → API | async pull, every 15 s | HTTP `GET /metrics` | Prometheus text exposition | missed scrapes only lose resolution |
+| Grafana → Prometheus | async, on dashboard load | PromQL over HTTP | JSON | — |
+| Prometheus → alert rules | async, every 30 s | `ops/alerts.yml` | PromQL | — |
+| API → logs | async to stdout | structlog | one JSON object per line with `request_id` | — |
+| GitHub Actions → Render | async, on a green `main` commit | Render blueprint, `autoDeployTrigger: checksPass` | Docker image | failed checks → no deploy; rollback = redeploy a previous build |
+
 ### 2.2 Request pipeline — `POST /v1/summarize`, synchronous, JSON over HTTPS
 ```
 client ─▶ ① auth: X-API-Key → tenant, plan                               401 / 403

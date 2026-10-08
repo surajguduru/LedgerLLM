@@ -65,3 +65,82 @@ groups:
             still returning to zero. Split by the retryable label: all-retryable usually means
             provider rate limiting, so check the free-tier quota before blaming the code.
           runbook: "Dashboard row 'Operational', panel 'Upstream provider errors by retryability'"
+
+      # --- Drift: is today different from last week? -------------------------------------------
+      # Each compares a recent window with the week before it (offset), so a slow change in traffic
+      # mix does not page but a step change does. Paired with the 'Drift' row on the dashboard.
+      - alert: QualityScoreDrop
+        # Online judge (app/quality): mean faithfulness over 6h fell by 0.5 or more on the 1-5 scale
+        # against the previous week, with at least 10 samples (~200 requests at 5 %) in the window.
+        expr: >-
+          (
+            sum(rate(ledgerllm_quality_score_sum{dimension="faithfulness"}[6h])) by (prompt_version)
+            / clamp_min(sum(rate(ledgerllm_quality_score_count{dimension="faithfulness"}[6h])) by (prompt_version), 1e-9)
+          )
+          <
+          (
+            sum(rate(ledgerllm_quality_score_sum{dimension="faithfulness"}[7d] offset 6h)) by (prompt_version)
+            / clamp_min(sum(rate(ledgerllm_quality_score_count{dimension="faithfulness"}[7d] offset 6h)) by (prompt_version), 1e-9)
+          ) - 0.5
+          and
+          sum(increase(ledgerllm_quality_score_count{dimension="faithfulness"}[6h])) by (prompt_version) >= 10
+        for: 30m
+        labels: { severity: warning, category: quality }
+        annotations:
+          summary: "Judge faithfulness for {{ $labels.prompt_version }} dropped by 0.5+ against last week"
+          description: >-
+            The sampled online judge scores this prompt version lower than it did last week. If a
+            prompt or model changed, roll back with SUMMARIZE_PROMPT_VERSION. If nothing changed, read
+            the judge's issues in GET /admin/quality (drift section) — a provider-side model update is
+            the usual cause. Not covered: coverage-only drops, and versions with < 10 samples.
+          runbook: "Dashboard row 'Quality', panel 'Judge score by prompt version'"
+
+      - alert: CostPerRequestDrift
+        # Completion cost per successful request over 1h is 1.5x the previous week's.
+        expr: >-
+          (
+            sum(rate(ledgerllm_cost_microusd_total{purpose="completion"}[1h]))
+            / clamp_min(sum(rate(http_requests_total{handler="/v1/summarize",status="200"}[1h])), 1e-9)
+          )
+          > 1.5 *
+          (
+            sum(rate(ledgerllm_cost_microusd_total{purpose="completion"}[7d] offset 1h))
+            / clamp_min(sum(rate(http_requests_total{handler="/v1/summarize",status="200"}[7d] offset 1h)), 1e-9)
+          )
+        for: 1h
+        labels: { severity: warning, category: drift }
+        annotations:
+          summary: "Cost per request is {{ $value | printf \"%.0f\" }} µUSD, 1.5x last week's"
+          description: >-
+            Each request costs half again what it did last week. Tenants are billed for it, so this is
+            margin and budget burn, not an outage. Check 'Tokens per successful request' (bigger
+            documents?) and spend by model (is the fallback answering?). Not covered: total spend
+            growth from more traffic, which is expected.
+          runbook: "Dashboard row 'Drift'"
+
+      - alert: GuardrailBlockRateDrift
+        # Block rate over 1h is 3x the previous week's and above 2 %: a new rule over-blocking, or an attack.
+        expr: >-
+          (
+            sum(rate(ledgerllm_guardrail_verdicts_total{blocked="true"}[1h]))
+            / clamp_min(sum(rate(ledgerllm_guardrail_verdicts_total[1h])), 1e-9)
+          ) > 0.02
+          and
+          (
+            sum(rate(ledgerllm_guardrail_verdicts_total{blocked="true"}[1h]))
+            / clamp_min(sum(rate(ledgerllm_guardrail_verdicts_total[1h])), 1e-9)
+          ) > 3 *
+          (
+            sum(rate(ledgerllm_guardrail_verdicts_total{blocked="true"}[7d] offset 1h))
+            / clamp_min(sum(rate(ledgerllm_guardrail_verdicts_total[7d] offset 1h)), 1e-9)
+          )
+        for: 30m
+        labels: { severity: warning, category: drift }
+        annotations:
+          summary: "Guardrail block rate {{ $value | humanizePercentage }}, 3x last week's"
+          description: >-
+            Far more requests are being blocked than last week. After a guardrail change, treat it as a
+            false-positive regression: switch GUARDRAILS_MODE=shadow and read
+            python -m evals.redteam.shadow_report. Without a change, check whether one tenant
+            dominates (an attack, or a document set that trips a rule).
+          runbook: "Dashboard row 'Drift', panel 'Guardrail block rate'"

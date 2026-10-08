@@ -195,10 +195,9 @@ function drawGauge(j) {
 
 function drawByDay(j) {
   const el = $('byday');
-  // Naresh's by_day series. Absent today -> say so rather than render an empty chart.
+  // Daily series from GET /v1/usage. Absent -> say so rather than render an empty chart.
   if (!Array.isArray(j.by_day)) {
-    el.innerHTML = '<div class="pending">Waiting on <code>by_day</code> in <code>GET /v1/usage</code>' +
-      ' (owner: Naresh). This chart renders automatically once the field is present.</div>';
+    el.innerHTML = '<div class="pending">Daily spend is not available right now.</div>';
     return;
   }
   if (!j.by_day.length) { el.innerHTML = '<p class="muted">No spend yet this period.</p>'; return; }
@@ -222,8 +221,7 @@ function drawByDay(j) {
 function drawRecent(j) {
   const el = $('recent');
   if (!Array.isArray(j.last_requests)) {
-    el.innerHTML = '<div class="pending">Waiting on <code>last_requests</code> in' +
-      ' <code>GET /v1/usage</code> (owner: Naresh).</div>';
+    el.innerHTML = '<div class="pending">Recent requests are not available right now.</div>';
     return;
   }
   el.innerHTML = rows(j.last_requests.slice(0, 10), [
@@ -252,8 +250,7 @@ async function drawStatement(key) {
     return;
   }
   if (probe.status === 404) {
-    el.innerHTML = '<div class="pending">Waiting on <code>GET /v1/usage/statement.csv</code>' +
-      ' (owner: Naresh).</div>';
+    el.innerHTML = '<div class="pending">Statement download is not available right now.</div>';
     return;
   }
   if (!probe.ok) {
