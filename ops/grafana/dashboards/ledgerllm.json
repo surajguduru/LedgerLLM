@@ -205,14 +205,14 @@
     {
       "type": "stat",
       "title": "Response cache hit rate",
-      "description": "A cache hit is served free and skips the budget reserve entirely (pipeline stage 4.5). Reads ledgerllm_cache_total, which Suraj adds with the cache implementation — shows No data until then.",
+      "description": "A cache hit is served free and skips the budget reserve entirely (pipeline stage 4.5). Hits over hits+misses only: the metric also emits result=bypass when the cache was never consulted, and counting those in the denominator would understate the hit rate. Reads ledgerllm_cache_total, which arrives with Suraj's cache — shows No data until that merges.",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 18 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(ledgerllm_cache_total{result=\"hit\"}[15m])) / clamp_min(sum(rate(ledgerllm_cache_total[15m])), 0.0001)",
+          "expr": "sum(rate(ledgerllm_cache_total{result=\"hit\"}[15m])) / clamp_min(sum(rate(ledgerllm_cache_total{result=~\"hit|miss\"}[15m])), 0.0001)",
           "legendFormat": "hit rate"
         }
       ],

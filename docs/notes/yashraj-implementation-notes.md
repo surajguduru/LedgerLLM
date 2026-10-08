@@ -401,3 +401,43 @@ says end-user accounts and OAuth are out (`DESIGN.md §1`), so this is the delib
 **Q: Why not server-render it?** Client-side `fetch` means the page reuses the *same* public
 `/v1/usage` contract a customer's own integration would call, so the dashboard cannot accidentally
 show numbers the API would not. It also keeps the route a static string with no DB access.
+
+---
+
+## 8 Oct — integration status, and a panel bug Suraj's branch exposed
+
+Suraj has pushed six branches (`feat/traffic-ratelimit`, `-idempotency`, `-cache`, `-routing`,
+`fix/ci-postgres-tests`, `feat/deploy-prep`). They **stack**, so `feat/deploy-prep` is the tip that
+contains all of it. **None are merged to `main` yet** — `main` is still at `f37e226`.
+
+### A panel bug I only found by reading his code
+His cache metric emits **three** label values, not two: `metrics.CACHE.labels("hit" | "miss")` on a
+lookup and `labels("bypass")` when the cache is never consulted.
+
+My hit-rate panel divided by `sum(rate(ledgerllm_cache_total[15m]))` — **all three**. So every
+bypassed request would have dragged the reported hit rate down, and the panel would have shown a
+number that was wrong in a direction nobody would question (caches are *supposed* to look mediocre).
+Fixed the denominator to `{result=~"hit|miss"}`.
+
+Worth saying in the viva: this is the failure mode my own dashboard-sync test does **not** catch. That
+test proves the metric *exists*; it cannot prove the PromQL *means* what I think. Label semantics are
+a contract between two people, and the only way to check it was to read the producer's code.
+
+### Merge conflicts, already scouted
+I dry-ran the merge and aborted it. Two conflicts, both trivial "both added":
+1. `app/observability/metrics.py` — he appends `CACHE` right below the `FEEDBACK` line that I edited
+   to add `prompt_version`. Resolution: keep my two-label `FEEDBACK` **and** his `CACHE`.
+2. `docs/MEASUREMENTS.md` — we appended to the same sections. Resolution: keep both sets of lines.
+
+I deliberately did **not** merge his branch into mine: his work is not on `main`, so merging would
+pull his commits into my PR and entangle two reviews. Correct order is his branches land on `main`
+first, then I rebase. 30 seconds of conflict resolution, known in advance.
+
+### What unblocks once his work merges
+- **Cache hit-rate panel** starts showing data — his `result` labels match my query.
+- `ledgerllm_cache_total` can come out of `PENDING_METRICS` in `tests/test_metrics.py`. It must stay
+  until then, because the metric does not exist on `main` and the test would fail.
+- **Burst test re-run gets a real 429 count.** His fixed-window limiter replaces the pass-through
+  stub, so the 0 × 429 in my current numbers becomes a real figure.
+- His own numbers are already filed: rate-limit check p50 747 µs / p99 1,404 µs on Postgres, window
+  edge burst measured at exactly the 2.0× rpm bound D3 accepts, 460 MB image, 1.1 s local cold start.
