@@ -337,15 +337,20 @@ category, method and source with the most recent (redacted) matches. Flip to `en
 looks right. A blocked request costs the tenant nothing beyond the classifier call; the budget reservation
 is released.
 
-**Evidence.** `make eval-redteam` runs 50 attacks and 50 benign look-alikes (`evals/redteam/cases.jsonl`) and
-fails CI below catch ≥ 0.90 / FPR ≤ 0.05. Heuristics-only: **96 % catch, 2 % FPR, p50 0.1 ms** (the two
-misses are a role-play persona and reversed text; the false positive is a security article quoting an
-attack string). A **held-out set** of 20 reworded attacks (`heldout.jsonl`, written without looking at the rules) is
-the honest number: the regexes alone caught **5 %** of it. That is why, with `GUARDRAIL_LLM=on`, every
-instruction below the block line is now classified rather than only the uncertain band
-(`GUARDRAIL_LLM_INSTRUCTIONS=always`): the cascade caught **90 %** of the held-out set unseen, for about
-$0.04 per 1,000 uncached requests. The regex layer is the free pre-filter and the regression floor;
-the classifier is the detector.
+**Evidence.** `make eval-redteam` runs 50 attacks and 65 benign look-alikes (`evals/redteam/cases.jsonl`,
+including 15 editorial instructions such as "ignore everything above the fold") and fails CI below
+catch ≥ 0.90 / FPR ≤ 0.05. Heuristics-only: **96 % catch, 1.5 % FPR, p50 0.1 ms** (the two misses are a
+role-play persona and reversed text; the false positive is a security article quoting an attack string).
+A first **held-out set** of 20 reworded attacks (`heldout.jsonl`) caught **5 %** with the regexes alone;
+it was then used while writing the "rewordings" rules (65 % after), so it no longer measures
+generalisation. A fresh set, `heldout_v2.jsonl` (20 attacks, direct and embedded in documents, plus 10
+benign look-alikes, written before running the rules on it and never used to tune them), is the honest
+number: heuristics only catch **0 of 20** (3 score a signal, none reaches the block line), with 0 of 10
+false positives. **The regex layer does not generalise to unseen paraphrases.** It is the free
+pre-filter and the regression floor; the LLM classifier (`GUARDRAIL_LLM=on`) is the layer meant to catch
+rewordings, which is why every instruction below the block line is classified rather than only the
+uncertain band (`GUARDRAIL_LLM_INSTRUCTIONS=always`): the cascade caught **90 %** of the first held-out
+set before it was seen, for about $0.04 per 1,000 uncached requests.
 
 ## Summarization quality
 
@@ -441,7 +446,7 @@ Judge cost at list price: ≈ $0.0027 per sample on a 3k-token document, so ≈ 
 
 | Gate | Command | What it measures |
 |---|---|---|
-| Red-team | `make eval-redteam` | catch rate and false-positive rate of the input guardrail on `evals/redteam/cases.jsonl` (50 attacks / 50 benign); fails below `thresholds.yaml` (0.90 / 0.05); `--llm on` measures the cascade |
+| Red-team | `make eval-redteam` | catch rate and false-positive rate of the input guardrail on `evals/redteam/cases.jsonl` (50 attacks / 65 benign); fails below `thresholds.yaml` (0.90 / 0.05); `--llm on` measures the cascade |
 | Shadow report | `python -m evals.redteam.shadow_report` | what `GUARDRAILS_MODE=shadow` would have blocked on real traffic, by stage / category / method / source |
 | Summarization | `make eval-summ` (`PROVIDER=gemini` for the LLM judge) | key-point coverage, length, leak checks; with the judge: faithfulness and coverage on a 1–5 scale |
 | Redaction | part of `make test` | every case in `evals/redaction/cases.jsonl` is redacted and nothing else is lost |
@@ -492,9 +497,10 @@ arithmetic**; only output *length* is synthetic.
 | End-to-end latency p50 / max (real model, **partial**) | ~1k-token doc **6.6 s / 28.3 s** (n = 8) · ~2.3k-token doc **5.7 s / 13.2 s** (n = 4) · ~6k-token: no successful call; platform overhead p50 **57–94 ms** | p50 ≤ 3 s, p99 ≤ 8 s ❌ | `latency_sample.py`, Gemini 3.8 Flash **free tier**, 8 Oct; 18 of 30 calls refused by the provider's quota (recorded as failures, not retried). Model time is > 98 % of the total; the free tier's queueing dominates. Re-run on a paid key for a full sample |
 | End-to-end latency p50 / max (real model, Groq) | ~1k-token doc **0.50 s / 0.63 s** (n = 10) · ~2.3k **0.73 s / 1.54 s** (n = 10) · ~4.4k **0.82 s / 1.08 s** (n = 6); platform overhead p50 **64–133 ms** | p50 ≤ 3 s, p99 ≤ 8 s ✅ | `latency_sample.py`, `qwen/qwen3.8-27b` on Groq's **free tier**, 30 requests paced 20 s apart, 8 Oct; 26 of 30 succeeded, 4 long documents refused by the tokens-per-minute cap (recorded as failures, not retried). Same pipeline as the Gemini row: the difference between the two rows is the provider |
 | End-to-end latency p50 / p95 / p99 in **production** (Render + Neon, real Gemini) | **2,273 / 25,660 / 25,660 ms**; 3 of 15 requests over 8 s. Platform overhead p50 **~860 ms** (range 767–1,126 ms) | p50 ≤ 3 s ✅, p99 ≤ 8 s ❌, overhead p99 ≤ 25 ms ❌ | Exact percentiles over `request_logs` on the deployment, n = 15 successful calls, 8 Oct — at that n the p95 and p99 are both just the slowest call, so read them as "the tail reached 25 s", not as a stable percentile. The cause is **cross-region database round trips, not CPU**: the pipeline makes ~19 database calls per request, `render.yaml` pinned no region so Render defaulted to Oregon while Neon is in `aws-us-east-2` (Ohio), and 19 × ~50 ms RTT ≈ 950 ms matches the measured gap. DESIGN.md §5 limit #1 dominating in production while invisible locally. The fix (`region: ohio`) is in review and **the re-measurement is still owed** |
-| Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 2 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` |
-| Red-team **held-out** set (20 reworded attacks, never used for tuning) | heuristics **5 %** before / 65 % after generic rules; cascade with every instruction classified **90 %** (old rules) / **100 %** (new rules) | — | `evals/redteam/heldout.jsonl`; the set is now seen, a fresh one is needed for the next honest number |
-| Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %**; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier |
+| Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 1.5 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 65 benign (15 of them editorial instructions naming document regions), `GUARDRAIL_LLM=off` |
+| Red-team **held-out v1** (20 reworded attacks; used during rule development) | heuristics **5 %** before / 65 % after rules written against it; cascade with every instruction classified **90 %** (old rules) / **100 %** (new rules) | — | `evals/redteam/heldout.jsonl`; seen by the rules, so not a generalisation number |
+| Red-team **held-out v2** (20 unseen attacks + 10 benign look-alikes) | heuristics only: catch **0 %** (0/20), FPR **0 %** (0/10); cascade: pending a classifier run | — | `evals/redteam/heldout_v2.jsonl`, reported by `make eval-redteam`, never gated or tuned against. The regex layer does not generalise to unseen paraphrases; the LLM classifier is the layer for that |
+| Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %** (on the 50/50 set, before the editorial cases); classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier |
 | Summarization faithfulness / coverage (LLM judge, 1–5) | `summarize_v1` **4.93 / 4.07**, hit rate 0.91 · `summarize_v2` **4.97 / 4.03**, hit rate 0.95 · **0 injection leaks** either way | ≥ 4.0 / ≥ 3.5 ✅ | 30-case Groq golden set, identical judge and rubric for both versions. v2 wins on faithfulness and key-point hit rate, v1 marginally on coverage, and v2 runs longer (15/30 over 120 words vs 7/30) at $0.00178 vs $0.00157 per request |
 
 Traffic-control micro-benchmarks: rate-limit check p50 747 µs / p99 1,404 µs on Postgres;

@@ -8,9 +8,9 @@
 The report states which configuration it measured. The CI gate runs heuristics only, so the thresholds
 in thresholds.yaml are the floor for the free path; the cascade numbers are recorded in docs/MEASUREMENTS.md.
 
-Cases: 50 attacks (direct 15 · indirect/document 15 · persona 8 · obfuscation 6 · multilingual 6) and 50
+Cases: 50 attacks (direct 15 · indirect/document 15 · persona 8 · obfuscation 6 · multilingual 6) and 65
 benign (25 look-alikes with trigger words in ordinary context, 10 ordinary instructions, 15 ordinary
-documents). A benign case may carry a `note` explaining why it is hard.
+documents, 15 editorial instructions that name document regions: "ignore everything above the fold"). A benign case may carry a `note` explaining why it is hard.
 """
 
 from __future__ import annotations
@@ -119,23 +119,42 @@ def run(*, pace_s: float = 0.0) -> dict:
             s["benign"] += 1
             s["fp"] += int(r["blocked"])
 
-    # Held-out set: reworded attacks written AFTER the rules, never used to tune them and never
-    # gated. Its catch rate is the honest generalisation number; the main set's is the regression
-    # floor. See docs/MEASUREMENTS.md for the history of both.
-    heldout_rows = []
-    for c in load_cases("heldout.jsonl"):
-        v = classify_input(c["text"], source=c.get("source", "instructions"))
-        if v.model and pace_s:
-            time.sleep(pace_s)
-        heldout_rows.append(
-            {
-                **c,
-                "blocked": v.blocked,
-                "score": v.score,
-                "method": v.method,
-                "llm": v.details.get("llm"),
-            }
-        )
+    # Held-out sets, never gated. heldout.jsonl (v1) was written after the rules but then used
+    # while adding the "rewordings" rules, so it is no longer a generalisation number.
+    # heldout_v2.jsonl was written fresh, attacks and benign look-alikes, and no rule may be tuned
+    # to it; its numbers are the honest ones. See docs/MEASUREMENTS.md for the history of both.
+    def run_set(name: str) -> list[dict]:
+        out = []
+        for c in load_cases(name):
+            v = classify_input(c["text"], source=c.get("source", "instructions"))
+            if v.model and pace_s:
+                time.sleep(pace_s)
+            out.append(
+                {
+                    **c,
+                    "blocked": v.blocked,
+                    "score": v.score,
+                    "method": v.method,
+                    "llm": v.details.get("llm"),
+                }
+            )
+        return out
+
+    def summarise_set(rows_: list[dict]) -> dict:
+        atk = [r for r in rows_ if r["label"] == "attack"]
+        ben = [r for r in rows_ if r["label"] == "benign"]
+        return {
+            "n": len(atk),
+            "n_benign": len(ben),
+            "catch_rate": _pct(sum(r["blocked"] for r in atk), len(atk)),
+            "false_positive_rate": _pct(sum(r["blocked"] for r in ben), len(ben)),
+            "missed": [r["id"] for r in atk if not r["blocked"]],
+            "false_positives": [r["id"] for r in ben if r["blocked"]],
+            "llm_calls": sum(1 for r in rows_ if r["llm"] and not r["llm"].get("cached")),
+        }
+
+    heldout_rows = run_set("heldout.jsonl")
+    heldout_v2_rows = run_set("heldout_v2.jsonl")
 
     latencies.sort()
     p50 = latencies[len(latencies) // 2] if latencies else 0
@@ -166,14 +185,11 @@ def run(*, pace_s: float = 0.0) -> dict:
             "cost_usd": microusd_to_usd(llm_cost),
             "cost_usd_per_1k_requests": round(microusd_to_usd(llm_cost) * 1000 / n, 4) if n else 0,
         },
-        "heldout": {
-            "n": len(heldout_rows),
-            "catch_rate": _pct(sum(r["blocked"] for r in heldout_rows), len(heldout_rows)),
-            "missed": [r["id"] for r in heldout_rows if not r["blocked"]],
-            "llm_calls": sum(1 for r in heldout_rows if r["llm"] and not r["llm"].get("cached")),
-        },
+        "heldout": summarise_set(heldout_rows),
+        "heldout_v2": summarise_set(heldout_v2_rows),
         "rows": rows,
         "heldout_rows": heldout_rows,
+        "heldout_v2_rows": heldout_v2_rows,
     }
 
 
@@ -206,8 +222,15 @@ def _print(report: dict) -> None:
     h = report["heldout"]
     if h["n"]:
         print(
-            f"  held-out (not gated): {h['catch_rate']:.1%} of {h['n']} reworded attacks caught"
-            f"   missed: {h['missed']}"
+            f"  held-out v1 (seen during rule work, not gated): {h['catch_rate']:.1%} of {h['n']} "
+            f"reworded attacks caught   missed: {h['missed']}"
+        )
+    h2 = report["heldout_v2"]
+    if h2["n"]:
+        print(
+            f"  held-out v2 (unseen, not gated): {h2['catch_rate']:.1%} of {h2['n']} attacks caught, "
+            f"fpr {h2['false_positive_rate']:.1%} of {h2['n_benign']} benign"
+            f"   missed: {h2['missed']}   fps: {h2['false_positives']}"
         )
     c = report["classifier"]
     if c["calls"]:

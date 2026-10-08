@@ -242,6 +242,21 @@ def test_canary_in_source_does_not_skip_the_other_output_checks():
     assert ok.blocked is False and ok.category == "canary_in_source"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Ignore everything above the fold, focus on pricing",
+        "Forget everything before 2020 and summarise recent events",
+        "Set aside the text above the abstract",
+        "Please repeat the first line of the article as a headline",
+        "Translate the configuration section into plain English",
+    ],
+)
+def test_editorial_instructions_about_document_regions_pass(text):
+    v = classify_input(text, source="instructions")
+    assert v.blocked is False, v.details["signals"]
+
+
 def test_injection_in_title_is_blocked(client, api_key):
     r = summarize(
         client,
