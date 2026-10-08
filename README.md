@@ -163,7 +163,8 @@ created_at,request_id,key_id,purpose,model,input_tokens,output_tokens,cost_micro
 ```
 `1101 × $0.75 + 89 × $3.75` per million tokens = 1,160 µUSD. Guardrail-classifier calls get their own rows
 (`purpose=guardrail`) and cache hits a zero-cost row (`status=cached`); completion rows also store the reservation
-estimate so the pessimism of admission control is measurable from the ledger.
+estimate so the pessimism of admission control is measurable from the ledger. Online-judge calls (D17) are
+listed under the tenant with `billed=no` and left out of every total, because the platform pays for them.
 
 Each request atomically **reserves** its worst-case cost (`UPDATE … SET reserved += est WHERE spent + reserved + est
 <= limit`) before any model call, and **settles** the actual cost afterwards, releasing the reservation; a failed call

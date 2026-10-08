@@ -6,9 +6,9 @@ import io
 
 from sqlalchemy import select
 
-from app.billing import budget
+from app.billing import budget, ledger
 from app.db import SessionLocal
-from app.models import BudgetPeriod
+from app.models import BudgetPeriod, UsageLedger
 from app.plans import microusd_to_usd
 from tests.conftest import make_tenant, summarize
 
@@ -94,3 +94,45 @@ def test_usage_follows_the_current_period(client, api_key, monkeypatch):
     monkeypatch.setattr(budget, "current_period", lambda now=None: "2099-01")
     u = _usage(client, api_key)
     assert u["period"] == "2099-01" and u["spent_usd"] == 0 and u["by_day"] == []
+
+
+def test_judge_rows_are_listed_but_not_billed(client, api_key):
+    """Online-judge calls (D17) are attributed to the tenant but paid by the platform."""
+    r = summarize(client, api_key)
+    with SessionLocal() as db:
+        completion = db.scalars(select(UsageLedger)).one()
+        ledger.book(
+            db,
+            tenant_id=completion.tenant_id,
+            key_id=None,
+            request_id=r.json()["request_id"],
+            purpose="judge",
+            model="gemini-3.8-flash",
+            input_tokens=3000,
+            output_tokens=60,
+            cost_microusd=2475,
+            price_version=completion.price_version,
+            prompt_version="judge",
+            latency_ms=900,
+        )
+        db.commit()
+        spent = db.scalars(select(BudgetPeriod)).one().spent_microusd
+
+    u = _usage(client, api_key)
+    assert u["spent_usd"] == microusd_to_usd(spent)
+    assert u["by_day"][0]["cost_usd"] == u["spent_usd"]
+    assert sum(m["cost_usd"] for m in u["by_model"]) == u["spent_usd"]
+    assert u["input_tokens"] == completion.input_tokens
+    judge = next(p for p in u["by_purpose"] if p["purpose"] == "judge")
+    assert judge["billed"] is False and judge["cost_usd"] == 0.002475
+    assert {(x["purpose"], x["billed"]) for x in u["last_requests"]} == {
+        ("completion", True),
+        ("judge", False),
+    }
+
+    rows = list(csv.DictReader(io.StringIO(_statement(client, api_key).text)))
+    assert [(x["purpose"], x["billed"]) for x in rows[:-1]] == [
+        ("completion", "yes"),
+        ("judge", "no"),
+    ]
+    assert int(rows[-1]["cost_microusd"]) == spent

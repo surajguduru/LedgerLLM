@@ -1,7 +1,9 @@
 """Per-tenant usage for a billing period: summary, daily series, recent calls and a CSV statement.
 
 Everything is read from the ledger (the source of truth for cost attribution) except spent/reserved,
-which come from the budget row that admission control uses. Money stays integer micro-USD until the
+which come from the budget row that admission control uses. Online-judge rows (D17) are attributed to
+the tenant but paid by the platform: they are listed with billed=false and left out of every cost,
+token and request total, so the totals reconcile with `spent`. Money stays integer micro-USD until the
 response layer. Days are UTC calendar days on both SQLite and Postgres. OWNER: Naresh.
 """
 
@@ -20,6 +22,8 @@ from app.plans import Plan, load_plans, microusd_to_usd
 from app.schemas import UsageSummary
 
 LAST_REQUESTS = 10
+UNBILLED_PURPOSES = ("judge",)  # platform cost, never settled against the tenant's budget (D17)
+BILLED = UsageLedger.purpose.not_in(UNBILLED_PURPOSES)
 
 STATEMENT_COLUMNS = (
     "created_at",
@@ -34,6 +38,7 @@ STATEMENT_COLUMNS = (
     "price_version",
     "prompt_version",
     "status",
+    "billed",
 )
 
 
@@ -78,19 +83,24 @@ def summarize_usage(db: Session, tenant: Tenant, plan: Plan) -> UsageSummary:
             func.count(func.distinct(UsageLedger.request_id)),
             func.coalesce(func.sum(UsageLedger.input_tokens), 0),
             func.coalesce(func.sum(UsageLedger.output_tokens), 0),
-        ).where(in_period)
+        ).where(in_period & BILLED)
     ).one()
 
     by_model = [
         {"model": m, "requests": n, "cost_usd": microusd_to_usd(int(c or 0))}
         for m, n, c in db.execute(
             select(UsageLedger.model, func.count(), func.sum(UsageLedger.cost_microusd))
-            .where(in_period)
+            .where(in_period & BILLED)
             .group_by(UsageLedger.model)
         ).all()
     ]
     by_purpose = [
-        {"purpose": p, "calls": n, "cost_usd": microusd_to_usd(int(c or 0))}
+        {
+            "purpose": p,
+            "calls": n,
+            "cost_usd": microusd_to_usd(int(c or 0)),
+            "billed": p not in UNBILLED_PURPOSES,
+        }
         for p, n, c in db.execute(
             select(UsageLedger.purpose, func.count(), func.sum(UsageLedger.cost_microusd))
             .where(in_period)
@@ -106,7 +116,7 @@ def summarize_usage(db: Session, tenant: Tenant, plan: Plan) -> UsageSummary:
                 func.count(func.distinct(UsageLedger.request_id)),
                 func.sum(UsageLedger.cost_microusd),
             )
-            .where(in_period)
+            .where(in_period & BILLED)
             .group_by(day)
             .order_by(day)
         ).all()
@@ -121,6 +131,7 @@ def summarize_usage(db: Session, tenant: Tenant, plan: Plan) -> UsageSummary:
             "output_tokens": r.output_tokens,
             "cost_usd": microusd_to_usd(r.cost_microusd),
             "status": r.status,
+            "billed": r.purpose not in UNBILLED_PURPOSES,
         }
         for r in db.scalars(
             select(UsageLedger)
@@ -151,7 +162,8 @@ def summarize_usage(db: Session, tenant: Tenant, plan: Plan) -> UsageSummary:
 
 
 def statement_csv(db: Session, tenant: Tenant, period: str) -> str:
-    """Every ledger row of the period, oldest first, with a TOTAL row that equals the bill."""
+    """Every ledger row of the period, oldest first, with a TOTAL row that equals the bill
+    (billed rows only)."""
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(STATEMENT_COLUMNS)
@@ -161,7 +173,8 @@ def statement_csv(db: Session, tenant: Tenant, period: str) -> str:
         .where(_in_period(tenant.id, period))
         .order_by(UsageLedger.created_at, UsageLedger.id)
     ):
-        total += r.cost_microusd
+        billed = r.purpose not in UNBILLED_PURPOSES
+        total += r.cost_microusd if billed else 0
         writer.writerow(
             (
                 _iso(r.created_at),
@@ -176,9 +189,10 @@ def statement_csv(db: Session, tenant: Tenant, period: str) -> str:
                 r.price_version,
                 r.prompt_version or "",
                 r.status,
+                "yes" if billed else "no",
             )
         )
     writer.writerow(
-        ("TOTAL", "", "", "", "", "", "", total, f"{microusd_to_usd(total):.6f}", "", "", "")
+        ("TOTAL", "", "", "", "", "", "", total, f"{microusd_to_usd(total):.6f}", "", "", "", "")
     )
     return out.getvalue()
