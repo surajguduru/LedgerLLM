@@ -11,6 +11,7 @@ Codes and statuses (keep this table in sync with docs/DESIGN.md):
     409 idempotency_conflict                   502 upstream_error
     409 idempotency_in_progress (+Retry-After)
     401 admin_unauthorized                     500 internal_error
+    404 tenant_not_found / key_not_found       409 key_revoked (rotate of a revoked key)
 """
 
 from __future__ import annotations
