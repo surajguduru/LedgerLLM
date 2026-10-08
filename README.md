@@ -198,7 +198,8 @@ is released.
 **Evidence.** `make eval-redteam` runs 50 attacks and 50 benign look-alikes (`evals/redteam/cases.jsonl`) and
 fails CI below catch ≥ 0.90 / FPR ≤ 0.05. Heuristics-only: **96 % catch, 2 % FPR, p50 0.1 ms** (the two
 misses are a role-play persona and reversed text; the false positive is a security article quoting an
-attack string — all three are the LLM layer's job). `--llm on` measures the cascade with a real key.
+attack string). With the cascade on, the classifier resolved all 12 uncertain cases correctly for $0.0014;
+the three residual errors score outside the band, so widening it is the next tuning step.
 
 ## Online quality monitoring
 
@@ -249,7 +250,7 @@ Measured values are recorded here as they are produced; conditions are stated ne
 | Burst quota test: admitted / refused (402), ledger total vs limit | pending | 50 users against a $0.02 budget |
 | Cost per request | pending | Gemini 3.8 Flash list price, bullets, 150 words |
 | Red-team catch rate / false-positive rate / added latency (heuristics only) | 96 % / 2 % / p50 0.10 ms, p99 0.41 ms | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` |
-| Red-team catch rate / false-positive rate (cascade) | pending | `python -m evals.redteam.run --llm on`, needs `LLM_API_KEY` |
+| Red-team catch rate / false-positive rate (cascade) | 96 % / 2 %; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier |
 | Guardrail classifier cost per 1,000 requests | ≈ $0.015 (instructions) – $0.07 (1.5k-token documents) | 12 % of eval cases in the uncertain band × Flash-Lite list price |
 | Online judge cost per 1,000 requests | ≈ $0.13 | 5 % sampled, 3k-token source, Gemini 3.8 Flash list price |
 | Summarization faithfulness / coverage (LLM judge, 1–5) | pending | `evals/summarization` |
