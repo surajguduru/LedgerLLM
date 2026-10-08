@@ -183,16 +183,97 @@ def test_pacer_with_zero_rpm_never_sleeps():
     assert clock.sleeps == []
 
 
-def _flaky(failures: int, *, retryable: bool = True):
+def test_tpm_window_holds_a_call_until_earlier_tokens_leave_it():
+    clock = FakeClock()
+    pacer = run.Pacer(0, tpm=7000, clock=clock, sleep=clock.sleep)
+    pacer.wait("m", 4000)  # t=0
+    clock.advance(10)
+    pacer.wait("m", 2500)  # t=10: 6,500 in the window, fits
+    clock.advance(5)
+    pacer.wait("m", 3000)  # t=15: 9,500 would exceed 7,000 -> wait for the t=0 call to leave (t=60)
+    assert clock.sleeps == [45.0]
+    pacer.wait(
+        "m", 2000
+    )  # t=60: window holds 2,500 (t=10) + 3,000 (t=60) -> 7,500: wait for t=10 to leave
+    assert clock.sleeps == [45.0, 10.0]
+
+
+def test_tpm_is_per_model():
+    clock = FakeClock()
+    pacer = run.Pacer(0, tpm=7000, clock=clock, sleep=clock.sleep)
+    pacer.wait("summarizer", 6000)
+    pacer.wait("judge", 6000)  # separate window: no wait
+    assert clock.sleeps == []
+
+
+def test_tpm_lets_an_oversized_call_run_alone():
+    clock = FakeClock()
+    pacer = run.Pacer(0, tpm=7000, clock=clock, sleep=clock.sleep)
+    pacer.wait("m", 9000)  # empty window: goes at once rather than waiting forever
+    pacer.wait("m", 100)  # but the next call waits for it to leave the window
+    assert clock.sleeps == [60.0]
+
+
+def test_rpm_and_tpm_combine():
+    clock = FakeClock()
+    pacer = run.Pacer(8, tpm=7000, clock=clock, sleep=clock.sleep)
+    pacer.wait("m", 5000)
+    pacer.wait("m", 1000)  # rpm spacing only: 7.5 s
+    pacer.wait("m", 2000)  # rpm: 7.5 s more (t=15); then 8,000 > 7,000 -> wait until t=60
+    assert clock.sleeps == [7.5, 7.5, 45.0]
+
+
+def test_zero_tpm_never_sleeps():
+    clock = FakeClock()
+    pacer = run.Pacer(0, tpm=0, clock=clock, sleep=clock.sleep)
+    for _ in range(5):
+        pacer.wait("m", 50_000)
+    assert clock.sleeps == []
+
+
+def _flaky(failures: int, *, retryable: bool = True, retry_after_s: float | None = None):
     state = {"calls": 0}
 
     def fn():
         state["calls"] += 1
         if state["calls"] <= failures:
-            raise ProviderError("gemini rate limited", retryable=retryable)
+            raise ProviderError(
+                "groq rate limited", retryable=retryable, retry_after_s=retry_after_s
+            )
         return "ok"
 
     return fn, state
+
+
+def test_backoff_honours_retry_after():
+    clock = FakeClock()
+    fn, state = _flaky(2, retry_after_s=7.25)
+    out = run.call_with_backoff(fn, model="m", pacer=run.Pacer(0), sleep=clock.sleep)
+    assert out == "ok" and state["calls"] == 3
+    assert clock.sleeps == [7.25 + run.RETRY_AFTER_MARGIN_S] * 2
+
+
+def test_backoff_gives_up_at_once_on_a_daily_quota_retry_after():
+    clock = FakeClock()
+    fn, state = _flaky(1, retry_after_s=15 * 3600)
+    with pytest.raises(ProviderError):
+        run.call_with_backoff(fn, model="m", pacer=run.Pacer(0), sleep=clock.sleep)
+    assert state["calls"] == 1 and clock.sleeps == []
+
+
+def test_backoff_paces_every_attempt_with_the_token_estimate():
+    seen: list[tuple[str, int]] = []
+
+    class RecordingPacer(run.Pacer):
+        def wait(self, model, tokens=0):
+            seen.append((model, tokens))
+            return 0.0
+
+    fn, _ = _flaky(1)
+    run.call_with_backoff(
+        fn, model="m", pacer=RecordingPacer(0), tokens=1234, sleep=FakeClock().sleep
+    )
+    assert seen == [("m", 1234), ("m", 1234)]
 
 
 def test_backoff_waits_15_30_60_then_succeeds():
@@ -238,6 +319,24 @@ def test_case_that_keeps_failing_is_recorded_not_raised():
 def test_default_judge_model_is_a_different_model_for_gemini_flash():
     assert run.default_judge_model("gemini-3.8-flash") == "gemini-3.5-flash-lite"
     assert run.default_judge_model("llama-3.1-8b-instant") == "llama-3.1-8b-instant"
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "judge", "expected"),
+    [
+        # Groq never falls back to DEFAULT_MODEL (a Gemini model Groq would reject).
+        ("groq", None, None, ("qwen/qwen3.8-27b", "openai/gpt-oss-120b")),
+        ("groq", "openai/gpt-oss-20b", None, ("openai/gpt-oss-20b", "openai/gpt-oss-120b")),
+        ("groq", None, "qwen/qwen3.8-27b", ("qwen/qwen3.8-27b", "qwen/qwen3.8-27b")),
+        ("gemini", None, None, ("gemini-3.8-flash", "gemini-3.5-flash-lite")),
+        ("gemini", "gemini-3.5-flash-lite", None, ("gemini-3.5-flash-lite",) * 2),
+        ("openai", None, None, ("default-x", "default-x")),
+        ("mock", None, None, ("default-x", None)),
+        ("mock", "m", "j", ("m", None)),
+    ],
+)
+def test_resolve_models_per_provider(provider, model, judge, expected):
+    assert run.resolve_models(provider, model, judge, default_model="default-x") == expected
 
 
 class RoutingProvider(MockProvider):

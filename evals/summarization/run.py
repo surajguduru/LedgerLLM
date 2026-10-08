@@ -2,13 +2,15 @@
 
     python -m evals.summarization.run --provider mock --gate      # plumbing gate (CI, every PR, free)
     python -m evals.summarization.run --provider gemini --gate    # quality gate with the LLM judge (LLM_API_KEY)
-      [--model M] [--judge-model J] [--prompt-version summarize_v2] [--rpm 8] [--out path.json]
+    python -m evals.summarization.run --provider groq --gate      # the same on Groq's free tier (a Groq key)
+      [--model M] [--judge-model J] [--prompt-version summarize_v2] [--rpm 8] [--tpm 7000] [--out path.json]
 
 Each golden.jsonl case (the document TEXT, not a URL, so it cannot drift) is summarised through the real
 feature code, then checked programmatically (key-point hit rate, length ratio, must_not_include leaks) and,
 with a real provider, scored by an LLM judge on another model of the same family (D21): a rubric prompt, strict
 JSON validation, one retry, and `judge_error` for cases that still fail. Calls are paced per model for the free
-tier and back off on 429/5xx. thresholds.yaml has a `mock` section (the mock cannot summarise, so it gates
+tier (requests and estimated tokens per minute) and back off on 429/5xx, for as long as the server's Retry-After
+says when it sends one. thresholds.yaml has a `mock` section (the mock cannot summarise, so it gates
 plumbing only) and a `model` section (the quality gate). Results go to results/last_<provider>.json with run
 metadata (prompt version@hash, models, tokens, wall time, means); results/last_gemini.json is committed.
 calibration.jsonl + agreement.py measure how far the judge agrees with hand scores.
@@ -31,6 +33,7 @@ import os
 import re
 import sys
 import time
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -40,13 +43,26 @@ from app.feature.fetch import FetchedPage
 from app.feature.prompts import load_prompt
 from app.feature.summarize import build_user_prompt, output_token_cap, run_summary
 from app.llm.base import ProviderError
+from app.llm.mock import estimate_tokens
 
 HERE = Path(__file__).parent
 MAX_WORDS = 120
 DEFAULT_RPM = 8  # Gemini free tier is ~10 requests/min per model; leave headroom
+DEFAULT_TPM = {"groq": 7000}  # Groq free tier: 8,000 tokens/min per model; leave headroom
 BACKOFF_S = (15, 30, 60)
+MAX_RETRY_AFTER_S = (
+    120.0  # a longer Retry-After is a daily quota: give up instead of sleeping for hours
+)
+RETRY_AFTER_MARGIN_S = 0.5  # the hint is to the millisecond; land just after the window frees up
 # Judge on a different model of the same family: less self-preference, and a separate free-tier quota.
 DEFAULT_JUDGE_MODELS = {"gemini-3.8-flash": "gemini-3.5-flash-lite"}
+# (summarizer, judge) when --model / --judge-model are not given. Fixed per provider rather than taken from
+# DEFAULT_MODEL, which names the production model (a Gemini model) and would be rejected by Groq.
+# Groq: the summarizer is Qwen, judged by a larger model from another family (D21).
+PROVIDER_MODELS = {
+    "gemini": ("gemini-3.8-flash", "gemini-3.5-flash-lite"),
+    "groq": ("qwen/qwen3.8-27b", "openai/gpt-oss-120b"),
+}
 
 # Gemini 3 models spend output tokens on hidden reasoning before the answer; 300 tokens can leave an empty reply.
 JUDGE_MAX_TOKENS = 2048
@@ -130,9 +146,10 @@ def parse_judgement(text: str) -> dict:
 def judge(provider, source: str, summary: str, model: str, *, call=None) -> dict:
     """Score one summary. Returns the validated scores plus `judge_tokens`, or `judge_error` after a retry.
 
-    `call(fn)` wraps each provider call (pacing and back-off live there); the default calls straight through.
+    `call(fn, tokens)` wraps each provider call (pacing and back-off live there); `tokens` is the call's
+    estimated cost against a tokens-per-minute limit. The default calls straight through.
     """
-    call = call or (lambda fn: fn())
+    call = call or (lambda fn, tokens=0: fn())
     extra = (
         {"response_format": {"type": "json_object"}}
         if getattr(provider, "supports_response_format", False)
@@ -149,7 +166,8 @@ def judge(provider, source: str, summary: str, model: str, *, call=None) -> dict
         res = call(
             lambda p=prompt: provider.complete(
                 model=model, system=JUDGE_SYSTEM, user=p, max_tokens=JUDGE_MAX_TOKENS, **extra
-            )
+            ),
+            estimate_tokens(JUDGE_SYSTEM + prompt) + JUDGE_MAX_TOKENS,
         )
         tokens += res.input_tokens + res.output_tokens
         try:
@@ -164,46 +182,86 @@ def judge(provider, source: str, summary: str, model: str, *, call=None) -> dict
 
 
 class Pacer:
-    """Keeps calls to each model at least 60/rpm seconds apart.
+    """Paces calls to each model by requests per minute and, optionally, by tokens per minute.
 
-    The Gemini free tier allows ~10 requests per minute per model and answers 429 above it; spacing calls is
-    cheaper than burning retries. Limits are per model, so the summarizer and the judge (separate free-tier
-    quotas) do not wait for each other. rpm <= 0 disables pacing (the mock).
+    Free tiers answer 429 above their per-model limits, and spacing calls is cheaper than burning retries.
+    Limits are per model, so the summarizer and the judge (separate quotas) do not wait for each other.
+
+    rpm: calls to one model are at least 60/rpm seconds apart (Gemini's binding limit, ~10 rpm).
+    tpm: a sliding 60-second window per model; a call whose estimated tokens would push the window above
+    tpm waits until enough earlier calls have left it. Groq's binding limit is 8,000 tokens/minute, and it
+    charges a request's prompt plus its *max_tokens* against the window up front (measured 8 Oct: 110
+    prompt tokens + max_tokens 250 took 360 from x-ratelimit-remaining-tokens), so the estimate is the
+    prompt estimate plus max_tokens, not the tokens actually used. A single call above tpm runs alone.
+    rpm <= 0 and tpm <= 0 disable the respective limit (the mock).
     """
 
-    def __init__(self, rpm: float, *, clock=time.monotonic, sleep=time.sleep) -> None:
+    WINDOW_S = 60.0
+
+    def __init__(
+        self, rpm: float, *, tpm: float = 0, clock=time.monotonic, sleep=time.sleep
+    ) -> None:
         self.interval = 60.0 / rpm if rpm > 0 else 0.0
+        self.tpm = tpm if tpm > 0 else 0
         self._clock, self._sleep = clock, sleep
         self._next: dict[str, float] = {}
+        self._window: dict[str, deque[tuple[float, int]]] = {}
 
-    def wait(self, model: str) -> float:
-        if not self.interval:
-            return 0.0
+    def wait(self, model: str, tokens: int = 0) -> float:
+        """Sleep as long as the limits require, record the call, and return the time slept."""
+        start = self._clock()
+        if self.interval:
+            delay = max(0.0, self._next.get(model, start) - start)
+            if delay:
+                self._sleep(delay)
+        if self.tpm:
+            window = self._window.setdefault(model, deque())
+            while True:
+                now = self._clock()
+                while window and window[0][0] <= now - self.WINDOW_S:
+                    window.popleft()
+                if not window or sum(t for _, t in window) + tokens <= self.tpm:
+                    break
+                self._sleep(window[0][0] + self.WINDOW_S - now)
+            window.append((self._clock(), tokens))
         now = self._clock()
-        delay = max(0.0, self._next.get(model, now) - now)
-        if delay:
-            self._sleep(delay)
-        self._next[model] = now + delay + self.interval
-        return delay
+        if self.interval:
+            self._next[model] = now + self.interval
+        return now - start
 
 
 def call_with_backoff(
-    fn, *, model: str, pacer: Pacer, sleep=time.sleep, delays: tuple[int, ...] = BACKOFF_S
+    fn,
+    *,
+    model: str,
+    pacer: Pacer,
+    tokens: int = 0,
+    sleep=time.sleep,
+    delays: tuple[int, ...] = BACKOFF_S,
 ):
-    """Paced call; on a retryable ProviderError (429, 5xx, timeout) wait 15 s, 30 s, 60 s, then re-raise."""
+    """Paced call; on a retryable ProviderError (429, 5xx, timeout) wait and retry up to len(delays) times.
+
+    The wait is the server's Retry-After when the error carries one (Groq sends the exact time until its
+    token window frees up), else 15 s, 30 s, 60 s. A Retry-After above MAX_RETRY_AFTER_S means a daily or
+    long-window quota: waiting cannot help this run, so the error is re-raised at once.
+    """
     for attempt in range(len(delays) + 1):
-        pacer.wait(model)
+        pacer.wait(model, tokens)
         try:
             return fn()
         except ProviderError as exc:
             if not exc.retryable or attempt == len(delays):
                 raise
-            print(f"    {model}: {exc}; retrying in {delays[attempt]} s", flush=True)
-            sleep(delays[attempt])
+            hint = exc.retry_after_s
+            if hint is not None and hint > MAX_RETRY_AFTER_S:
+                raise
+            delay = hint + RETRY_AFTER_MARGIN_S if hint is not None else delays[attempt]
+            print(f"    {model}: {exc}; retrying in {delay:g} s", flush=True)
+            sleep(delay)
     raise AssertionError("unreachable")
 
 
-def _direct(model: str, fn):
+def _direct(model: str, fn, tokens: int = 0):
     return fn()
 
 
@@ -233,16 +291,14 @@ def evaluate_case(
         fetched_ms=0,
     )
     user = build_user_prompt(prompt, page, style="bullets", max_words=MAX_WORDS, instructions=None)
+    cap = output_token_cap(prompt, MAX_WORDS)
     try:
         r = call(
             model,
             lambda: run_summary(
-                provider,
-                model=model,
-                prompt=prompt,
-                user_prompt=user,
-                max_tokens=output_token_cap(prompt, MAX_WORDS),
+                provider, model=model, prompt=prompt, user_prompt=user, max_tokens=cap
             ),
+            estimate_tokens(prompt.system + user) + cap,
         )
     except ProviderError as exc:
         row["error"] = f"summary: {exc}"
@@ -265,7 +321,7 @@ def evaluate_case(
                 case["text"],
                 r.text,
                 judge_model,
-                call=lambda fn: call(judge_model, fn),
+                call=lambda fn, tokens=0: call(judge_model, fn, tokens),
             )
         except ProviderError as exc:
             row["judge"] = {"judge_error": f"provider: {exc}", "judge_tokens": 0}
@@ -370,6 +426,26 @@ def default_judge_model(model: str) -> str:
     return DEFAULT_JUDGE_MODELS.get(model, model)
 
 
+def resolve_models(
+    provider: str, model: str | None, judge_model: str | None, *, default_model: str
+) -> tuple[str, str | None]:
+    """(summarizer, judge) for a run; the judge is None for the mock, which is never judged.
+
+    Explicit flags win. Providers in PROVIDER_MODELS have fixed defaults; others summarise with
+    DEFAULT_MODEL. An unset judge is the summarizer's same-family partner if it has one, else the
+    provider's default judge, else the summarizer itself.
+    """
+    if provider == "mock":
+        return model or default_model, None
+    preset = PROVIDER_MODELS.get(provider)
+    model = model or (preset[0] if preset else default_model)
+    if judge_model:
+        return model, judge_model
+    if model in DEFAULT_JUDGE_MODELS:
+        return model, DEFAULT_JUDGE_MODELS[model]
+    return model, preset[1] if preset else model
+
+
 def build_report(
     rows: list[dict],
     *,
@@ -379,6 +455,7 @@ def build_report(
     judge_model: str | None,
     rpm: float,
     wall_time_s: float,
+    tpm: float = 0,
 ) -> dict:
     summary_tokens = sum(r.get("tokens", 0) for r in rows)
     judge_tokens = sum(r.get("judge", {}).get("judge_tokens", 0) for r in rows)
@@ -390,6 +467,7 @@ def build_report(
         "timestamp_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "n": len(rows),
         "rpm": rpm,
+        "tpm": tpm,
         "tokens": {
             "summaries": summary_tokens,
             "judge": judge_tokens,
@@ -443,11 +521,17 @@ def main() -> int:
             "anthropic",
         ],
     )
-    ap.add_argument("--model", default=None, help="summarizer model; defaults to DEFAULT_MODEL")
+    ap.add_argument(
+        "--model",
+        default=None,
+        help="summarizer model; defaults per provider (groq: qwen/qwen3.8-27b, gemini: "
+        "gemini-3.8-flash), else DEFAULT_MODEL",
+    )
     ap.add_argument(
         "--judge-model",
         default=None,
-        help="defaults to gemini-3.5-flash-lite for gemini-3.8-flash, otherwise the summarizer model",
+        help="defaults per provider (groq: openai/gpt-oss-120b, gemini: gemini-3.5-flash-lite), "
+        "else the summarizer model",
     )
     ap.add_argument(
         "--prompt-version", default=None, help="e.g. summarize_v2; defaults to settings"
@@ -457,6 +541,13 @@ def main() -> int:
         type=float,
         default=None,
         help="max calls per minute per model (default 8 for real providers, 0 = unlimited for mock)",
+    )
+    ap.add_argument(
+        "--tpm",
+        type=float,
+        default=None,
+        help="max estimated tokens (prompt + max_tokens) per minute per model "
+        "(default 7000 for groq, 0 = unlimited otherwise)",
     )
     ap.add_argument(
         "--out", type=Path, default=None, help="defaults to results/last_<provider>.json"
@@ -469,14 +560,16 @@ def main() -> int:
     from app.llm import get_provider
 
     provider = get_provider()
-    model = args.model or get_settings().default_model
-    use_judge = args.provider != "mock"
-    judge_model = (args.judge_model or default_judge_model(model)) if use_judge else None
+    model, judge_model = resolve_models(
+        args.provider, args.model, args.judge_model, default_model=get_settings().default_model
+    )
+    use_judge = judge_model is not None
     rpm = args.rpm if args.rpm is not None else (0 if args.provider == "mock" else DEFAULT_RPM)
-    pacer = Pacer(rpm)
+    tpm = args.tpm if args.tpm is not None else DEFAULT_TPM.get(args.provider, 0)
+    pacer = Pacer(rpm, tpm=tpm)
 
-    def call(m: str, fn):
-        return call_with_backoff(fn, model=m, pacer=pacer)
+    def call(m: str, fn, tokens: int = 0):
+        return call_with_backoff(fn, model=m, pacer=pacer, tokens=tokens)
 
     prompt = load_prompt(args.prompt_version)
     th = yaml.safe_load((HERE / "thresholds.yaml").read_text())
@@ -503,6 +596,7 @@ def main() -> int:
         model=model,
         judge_model=judge_model,
         rpm=rpm,
+        tpm=tpm,
         wall_time_s=time.monotonic() - t0,
     )
     print_report(report)
