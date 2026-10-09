@@ -1,6 +1,6 @@
 """POST /v1/summarize — the request pipeline. Each stage calls into exactly one package:
 
-    1 auth (app/auth)  ->  2 idempotency replay (app/traffic)  ->  3 rate limit (app/traffic)
+    1 auth (app/auth)  ->  2 rate limit (app/traffic)  ->  3 idempotency replay (app/traffic)
     ->  4 acquire content (app/feature)  ->  5 estimate + reserve budget (app/billing)
     ->  6 input guardrail (app/guardrails)  ->  7 LLM (app/llm)  ->  8 output guardrail (app/guardrails)
     ->  9 settle + ledger (app/billing)  ->  10 redacted log + audit (app/compliance), metrics (app/observability)
@@ -62,7 +62,7 @@ from app.llm import (
 )
 from app.models import BudgetPeriod
 from app.observability import metrics
-from app.plans import load_plans, microusd_to_usd
+from app.plans import format_usd, load_plans, microusd_to_usd
 from app.quality.online_judge import maybe_sample
 from app.schemas import (
     BudgetInfo,
@@ -145,6 +145,19 @@ def _run_guardrail(
         )
         return False
     return True
+
+
+def _budget_headers(*, limit: int, spent: int, committed: int, warning: bool) -> dict[str, str]:
+    """X-Budget-* for any response that reports the budget: 200, cache hit and 402 alike."""
+    headers = {
+        "X-Budget-Limit-USD": f"{microusd_to_usd(limit):.6f}",
+        "X-Budget-Spent-USD": f"{microusd_to_usd(spent):.6f}",
+    }
+    if warning:
+        headers["X-Budget-Warning"] = (
+            f"{format_usd(committed)} of {format_usd(limit)} USD committed this period"
+        )
+    return headers
 
 
 def _persistable(body: SummarizeResponse) -> str:
@@ -235,7 +248,25 @@ def summarize(
     t0 = perf_counter()
     elapsed = lambda: int((perf_counter() - t0) * 1000)  # noqa: E731
 
-    # 2. idempotency replay / claim ------------------------------------------------------------
+    # 2. rate limit ----------------------------------------------------------------------------
+    # Before the replay: a replay is free, but a storm of them is still traffic against the plan's rpm.
+    plan = auth.plan
+    rl = check_rate_limit(db, auth.api_key.id, plan, tenant_id=auth.tenant.id)
+    response.headers.update(rl.headers())
+    if not rl.allowed:
+        raise _fail(
+            db,
+            status=429,
+            code="rate_limited",
+            message=f"plan '{plan.name}' allows {plan.rpm} requests/minute",
+            request_id=request_id,
+            auth=auth,
+            latency_ms=elapsed(),
+            audit_type=audit_events.RATE_LIMITED,
+            headers={"Retry-After": str(rl.retry_after_s), **rl.headers()},
+        )
+
+    # 3. idempotency replay / claim ------------------------------------------------------------
     request_hash = idempotency.hash_request(payload)
     if not idempotency_key:
         try:
@@ -271,7 +302,7 @@ def summarize(
         return JSONResponse(
             status_code=existing.status_code,
             content=json.loads(existing.response_json),
-            headers={"Idempotent-Replayed": "true", "X-Request-ID": request_id},
+            headers={"Idempotent-Replayed": "true", "X-Request-ID": request_id, **rl.headers()},
         )
     if existing is not None or not idempotency.claim(
         db,
@@ -323,26 +354,10 @@ def _pipeline(
     bypass_cache: bool,
     t0: float,
 ):
-    """Stages 3-10. Runs at most once per idempotency key at a time (see `summarize`)."""
+    """Stages 4-10. Runs at most once per idempotency key at a time (see `summarize`)."""
     elapsed = lambda: int((perf_counter() - t0) * 1000)  # noqa: E731
     tenant, key, plan = auth.tenant, auth.api_key, auth.plan
     raw_for_log = payload.text or str(payload.url)
-
-    # 3. rate limit ----------------------------------------------------------------------------
-    rl = check_rate_limit(db, key.id, plan, tenant_id=tenant.id)
-    response.headers.update(rl.headers())
-    if not rl.allowed:
-        raise _fail(
-            db,
-            status=429,
-            code="rate_limited",
-            message=f"plan '{plan.name}' allows {plan.rpm} requests/minute",
-            request_id=request_id,
-            auth=auth,
-            latency_ms=elapsed(),
-            audit_type=audit_events.RATE_LIMITED,
-            headers={"Retry-After": str(rl.retry_after_s), **rl.headers()},
-        )
 
     # 4. acquire content -----------------------------------------------------------------------
     model = payload.model or plan.default_model or settings.default_model
@@ -446,10 +461,7 @@ def _pipeline(
         committed = spent + (bp.reserved_microusd if bp else 0)
         warning = committed >= limit * load_plans().soft_warning_fraction
         response.headers.update(
-            {
-                "X-Budget-Limit-USD": f"{microusd_to_usd(limit):.6f}",
-                "X-Budget-Spent-USD": f"{microusd_to_usd(spent):.6f}",
-            }
+            _budget_headers(limit=limit, spent=spent, committed=committed, warning=warning)
         )
         body = SummarizeResponse(
             request_id=request_id,
@@ -558,17 +570,24 @@ def _pipeline(
     )
     reserved_at = datetime.now(UTC)
     decision = budget.reserve(db, tenant, plan, est_microusd, now=reserved_at)
-    budget_headers = {
-        "X-Budget-Limit-USD": f"{microusd_to_usd(decision.limit_microusd):.6f}",
-        "X-Budget-Spent-USD": f"{microusd_to_usd(decision.spent_microusd):.6f}",
-    }
+    budget_headers = _budget_headers(
+        limit=decision.limit_microusd,
+        spent=decision.spent_microusd,
+        committed=decision.spent_microusd + decision.reserved_microusd,
+        warning=decision.warning,
+    )
     response.headers.update(budget_headers)
     if not decision.allowed:
+        # Refused on this request's worst case, which may exceed what is left even when some is.
         raise _fail(
             db,
             status=402,
             code="budget_exceeded",
-            message=f"monthly budget of ${microusd_to_usd(decision.limit_microusd):.2f} exhausted for {decision.period}",
+            message=(
+                f"estimated cost ${format_usd(est_microusd)} exceeds remaining "
+                f"${format_usd(decision.remaining_microusd)} of the "
+                f"${format_usd(decision.limit_microusd)} monthly budget for {decision.period}"
+            ),
             request_id=request_id,
             auth=auth,
             latency_ms=elapsed(),
@@ -582,11 +601,6 @@ def _pipeline(
             },
         )
     db.info["open_reservation"] = (tenant.id, decision.period, est_microusd)
-    if decision.warning:
-        response.headers["X-Budget-Warning"] = (
-            f"{microusd_to_usd(decision.spent_microusd + decision.reserved_microusd):.4f} of "
-            f"{microusd_to_usd(decision.limit_microusd):.2f} USD committed this period"
-        )
     if decision.first_warning:
         audit(
             db,

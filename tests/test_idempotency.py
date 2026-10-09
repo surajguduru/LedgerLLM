@@ -1,4 +1,4 @@
-from tests.conftest import summarize
+from tests.conftest import make_tenant, summarize
 
 
 def test_same_key_replays_same_response(client, api_key):
@@ -152,3 +152,20 @@ def test_cleanup_deletes_only_expired(client, api_key, monkeypatch):
     with SessionLocal() as db:
         assert idempotency.cleanup(db) == 1
     assert _records() == []
+
+
+def test_replays_count_against_the_rate_limit_but_are_free(client):
+    key = make_tenant(client, plan="free")["api_key"]  # 5 requests/minute
+    h = {"Idempotency-Key": "storm"}
+    first = summarize(client, key, _headers=h)
+    assert first.status_code == 200
+    remaining = int(first.headers["X-RateLimit-Remaining"])
+    for _ in range(4):
+        r = summarize(client, key, _headers=h)
+        assert r.status_code == 200 and r.headers["Idempotent-Replayed"] == "true"
+        assert int(r.headers["X-RateLimit-Remaining"]) == remaining - 1
+        remaining -= 1
+    r = summarize(client, key, _headers=h)
+    assert r.status_code == 429 and r.json()["error"]["code"] == "rate_limited"
+    usage = client.get("/v1/usage", headers={"X-API-Key": key}).json()
+    assert usage["spent_usd"] == first.json()["usage"]["cost_usd"]
