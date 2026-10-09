@@ -1,4 +1,4 @@
-"""Online quality sampling (app/quality/online_judge.py). OWNER: Thrishal.
+"""Online quality sampling (app/quality/online_judge.py).
 
 The judge runs on a background thread; tests call drain() before reading the DB. The provider is either
 the mock (whose reply is bullets, i.e. non-JSON — the "unparsable" path) or a stub that returns JSON.

@@ -1,4 +1,4 @@
-"""URL fetching and the SSRF guard. OWNER: Sai.
+"""URL fetching and the SSRF guard.
 
 No test here touches the real network or real DNS: an autouse fixture replaces
 `socket.getaddrinfo` with a table of names, and anything not in the table is resolved

@@ -1,7 +1,7 @@
 {
   "uid": "ledgerllm",
   "title": "LedgerLLM",
-  "description": "Operator view. Rows follow the monitoring categories in docs/DESIGN.md section 4: Operational, Cost, Input, Quality. Owner: Yashraj.",
+  "description": "Operator view. Rows follow the monitoring categories in docs/DESIGN.md section 4: Operational, Cost, Input, Quality.",
   "tags": [
     "ledgerllm"
   ],
@@ -414,7 +414,7 @@
     {
       "type": "stat",
       "title": "Response cache hit rate",
-      "description": "A cache hit is served free and skips the budget reserve entirely (pipeline stage 4.5). Hits over hits+misses only: the metric also emits result=bypass when the cache was never consulted, and counting those in the denominator would understate the hit rate. Reads ledgerllm_cache_total, which arrives with Suraj's cache \u2014 shows No data until that merges.",
+      "description": "A cache hit is served free and skips the budget reserve entirely (pipeline stage 4.5). Hits over hits+misses only: the metric also emits result=bypass when the cache was never consulted, and counting those in the denominator would understate the hit rate. Reads ledgerllm_cache_total.",
       "gridPos": {
         "h": 8,
         "w": 8,

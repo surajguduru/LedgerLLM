@@ -6,7 +6,7 @@
     make loadtest
     python loadtest/verify_quota.py
 
-OWNER: Yashraj. Run against Postgres, not SQLite. Publish: p50/p99, req/s, the 200/402/429 split, and
+Run against Postgres, not SQLite. Publish: p50/p99, req/s, the 200/402/429 split, and
 the ledger total vs the budget (must never exceed). Keep LLM_PROVIDER=mock for the burst (free, and
 the claim under test is our accounting, not the provider's latency -- decision D8).
 

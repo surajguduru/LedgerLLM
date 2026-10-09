@@ -1,6 +1,6 @@
 """PII redaction applied to everything we persist or log.
 
-OWNER: Loukik. Covers email, phone, credit cards (Luhn-validated), IBAN (mod-97-validated), US SSN,
+Covers email, phone, credit cards (Luhn-validated), IBAN (mod-97-validated), US SSN,
 Aadhaar, PAN, IPv4, IPv6 (parse-validated), street addresses, and secrets: API keys, JWTs, GitHub and
 AWS tokens. Patterns run specific -> generic so the broad phone regex never eats card/IBAN/SSN/Aadhaar/IP
 digits. Use redact() for

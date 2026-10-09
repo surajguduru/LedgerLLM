@@ -2,6 +2,9 @@
 
 **A multi-tenant LLM API with per-tenant cost attribution, quotas, abuse protection and audit logging.**
 
+**Live:** <https://ledgerllm.onrender.com> — sign up at [`/app`](https://ledgerllm.onrender.com/app) for a free-plan key and the
+playground, or read the API at [`/docs`](https://ledgerllm.onrender.com/docs). It deploys from `main` once CI passes.
+
 The product feature is deliberately small: *summarize any URL or text*. Everything around that one
 LLM call is the point — the parts a SaaS vendor needs before selling an LLM feature to many customers:
 
@@ -95,8 +98,8 @@ make down
 
 ```
 client ─JSON/HTTPS─▶ ① auth (API key → tenant, plan)         ⑥ input guardrail (instructions, then document)
-                     ② idempotency replay                     ⑦ LLM call with the versioned prompt
-                     ③ rate limit (per key + tenant, /min)   ⑧ output moderation
+                     ② rate limit (per key + tenant, /min)   ⑦ LLM call with the versioned prompt
+                     ③ idempotency replay                     ⑧ output moderation
                      ④ fetch URL + extract text (SSRF-guarded) ⑨ settle actual cost; ledger row; metrics
                      ⑤ estimate cost → ATOMIC budget reserve  ⑩ redacted request log; audit; idempotent store
 ```
@@ -136,13 +139,17 @@ Headers on every response: `X-Request-ID`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 | `GET /app` | **tenant portal**: sign up / sign in, manage API keys, usage per key, daily and monthly spend |
 | `/app/api/*` | portal JSON API (session cookie): `signup`, `login`, `logout`, `me`, `keys` (create, `/{id}/revoke`, `/{id}/rotate`), `models`, `playground/summarize`, `usage?period=`, `statement.csv`, `billing`, `billing/plan` |
 | `GET /dashboard` | usage/billing page for a tenant (paste a key) |
-| `POST /admin/tenants`, `POST /admin/tenants/{id}/keys`, `GET /admin/tenants` | tenant and key management (`Authorization: Bearer $ADMIN_TOKEN`) |
-| `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus, health, OpenAPI |
+| `GET`/`POST /admin/tenants`, `PATCH /admin/tenants/{id}` (plan, status, budget override) | tenant management (`Authorization: Bearer $ADMIN_TOKEN`) |
+| `GET`/`POST /admin/tenants/{id}/keys`, `POST /admin/keys/{id}/rotate`, `DELETE /admin/keys/{id}` | key management: list, create, rotate (once), revoke |
+| `GET /admin/audit`, `GET /admin/quality` | audit trail (filter by tenant / event type, cursor `before`); online judge scores per prompt version |
+| `GET /metrics`, `GET /healthz`, `GET /docs` | Prometheus (needs `Authorization: Bearer $METRICS_TOKEN` when set; 404 outside dev/test without it), health and deployed commit, OpenAPI |
 
 Errors always look like `{"error": {"code": "…", "message": "…", "request_id": "…"}}` with stable codes:
 `401 missing_api_key | invalid_api_key` · `403 tenant_suspended | model_not_allowed` · `429 rate_limited` ·
 `402 budget_exceeded` · `400 blocked_input | fetch_blocked` · `422 fetch_failed | validation_error` ·
-`409 idempotency_conflict` · `502 upstream_error`.
+`409 idempotency_conflict | idempotency_in_progress` · `404 request_not_found` (feedback) ·
+`413 content_too_large` (body over `MAX_REQUEST_BYTES`, default 4 MB) · `404 not_found` (no such route) ·
+`405 method_not_allowed` · `502 upstream_error`.
 
 ## Tenant portal
 
@@ -287,7 +294,7 @@ applies from the next request.
 | Burst of 50 concurrent requests, $0.004 budget | 4 admitted, 46 × 402; spent $0.002628 (66 % of limit), ledger total = spent, nothing left reserved | Postgres 16, mock provider with 50 ms latency, `python -m scripts.bench_billing burst` |
 | Same burst with *check `spent`, then call* (the design D2 rejects) | 10 admitted; spent $0.006570 = **164 % of the limit** | same |
 | Reservation pessimism (estimate ÷ actual) | median 1.43×, p95 1.84× | 9 requests, 3 styles × 50/150/300 words, ~3k-token document, mock token counts, `python -m scripts.bench_billing costs` |
-| Cost of a ~3k-token request at `gemini-3.8-flash` list price | $0.0027 actual, reserved $0.0031–$0.0050 depending on `max_words` | same; real-model output lengths pending a Gemini run |
+| Cost of a ~3k-token request at `gemini-3.8-flash` list price | $0.0027 actual, reserved $0.0031–$0.0050 depending on `max_words` | same; output lengths from the mock, priced at `gemini-3.8-flash` list price |
 | Guardrail share of spend | 0 % | `GUARDRAIL_LLM=off` (the default): heuristic guardrails make no model calls |
 
 The 34 % headroom in the burst row is the accepted cost of D2: the last requests that would have fit are refused
@@ -299,7 +306,7 @@ because their worst case would not. Decision D23 in `docs/DESIGN.md` covers how 
   request (Postgres and SQLite). Free 5, pro 60, enterprise 600 requests/minute. A check costs p50 0.75 ms / p99 1.4 ms
   on Postgres; the accepted cost of a fixed window is up to 2× rpm across a window boundary (measured: exactly 2.0×).
 - **Idempotency** — `Idempotency-Key` is scoped per tenant and kept for 24 h. The same key with the same body replays the
-  stored response and is never billed twice; with a different body it is 409 `idempotency_conflict`; while the first
+  stored response and is never billed twice (a replay still counts against the rate limit and carries `X-RateLimit-*`); with a different body it is 409 `idempotency_conflict`; while the first
   request is still running, a duplicate gets 409 `idempotency_in_progress`. A failed request frees the key for a retry.
 - **Response cache** — exact match on tenant, model, prompt hash, options and the extracted text, checked before the budget
   reserve. A hit is free (`usage.cached: true`, `cost_usd: 0`) and is booked as a zero-cost ledger row so request counts
@@ -337,15 +344,20 @@ category, method and source with the most recent (redacted) matches. Flip to `en
 looks right. A blocked request costs the tenant nothing beyond the classifier call; the budget reservation
 is released.
 
-**Evidence.** `make eval-redteam` runs 50 attacks and 50 benign look-alikes (`evals/redteam/cases.jsonl`) and
-fails CI below catch ≥ 0.90 / FPR ≤ 0.05. Heuristics-only: **96 % catch, 2 % FPR, p50 0.1 ms** (the two
-misses are a role-play persona and reversed text; the false positive is a security article quoting an
-attack string). A **held-out set** of 20 reworded attacks (`heldout.jsonl`, written without looking at the rules) is
-the honest number: the regexes alone caught **5 %** of it. That is why, with `GUARDRAIL_LLM=on`, every
-instruction below the block line is now classified rather than only the uncertain band
-(`GUARDRAIL_LLM_INSTRUCTIONS=always`): the cascade caught **90 %** of the held-out set unseen, for about
-$0.04 per 1,000 uncached requests. The regex layer is the free pre-filter and the regression floor;
-the classifier is the detector.
+**Evidence.** `make eval-redteam` runs 50 attacks and 65 benign look-alikes (`evals/redteam/cases.jsonl`,
+including 15 editorial instructions such as "ignore everything above the fold") and fails CI below
+catch ≥ 0.90 / FPR ≤ 0.05. Heuristics-only: **96 % catch, 1.5 % FPR, p50 0.1 ms** (the two misses are a
+role-play persona and reversed text; the false positive is a security article quoting an attack string).
+A first **held-out set** of 20 reworded attacks (`heldout.jsonl`) caught **5 %** with the regexes alone;
+it was then used while writing the "rewordings" rules (65 % after), so it no longer measures
+generalisation. A fresh set, `heldout_v2.jsonl` (20 attacks, direct and embedded in documents, plus 10
+benign look-alikes, written before running the rules on it and never used to tune them), is the honest
+number: heuristics only catch **0 of 20** (3 score a signal, none reaches the block line), with 0 of 10
+false positives. **The regex layer does not generalise to unseen paraphrases.** It is the free
+pre-filter and the regression floor; the LLM classifier (`GUARDRAIL_LLM=on`) is the layer meant to catch
+rewordings, which is why every instruction below the block line is classified rather than only the
+uncertain band (`GUARDRAIL_LLM_INSTRUCTIONS=always`): the cascade caught **90 %** of the first held-out
+set before it was seen, for about $0.04 per 1,000 uncached requests.
 
 ## Summarization quality
 
@@ -441,7 +453,7 @@ Judge cost at list price: ≈ $0.0027 per sample on a 3k-token document, so ≈ 
 
 | Gate | Command | What it measures |
 |---|---|---|
-| Red-team | `make eval-redteam` | catch rate and false-positive rate of the input guardrail on `evals/redteam/cases.jsonl` (50 attacks / 50 benign); fails below `thresholds.yaml` (0.90 / 0.05); `--llm on` measures the cascade |
+| Red-team | `make eval-redteam` | catch rate and false-positive rate of the input guardrail on `evals/redteam/cases.jsonl` (50 attacks / 65 benign); fails below `thresholds.yaml` (0.90 / 0.05); `--llm on` measures the cascade |
 | Shadow report | `python -m evals.redteam.shadow_report` | what `GUARDRAILS_MODE=shadow` would have blocked on real traffic, by stage / category / method / source |
 | Summarization | `make eval-summ` (`PROVIDER=gemini` for the LLM judge) | key-point coverage, length, leak checks; with the judge: faithfulness and coverage on a 1–5 scale |
 | Redaction | part of `make test` | every case in `evals/redaction/cases.jsonl` is redacted and nothing else is lost |
@@ -491,17 +503,18 @@ arithmetic**; only output *length* is synthetic.
 | Metric cardinality | **171 series**, of which only **18** carry a `tenant` label → **6 per tenant** | — | 3 tenants, 1 model, measured with Prometheus `count()`. Extrapolates to ~27,000 series at 1,000 tenants × 3 models — `DESIGN.md` §5 limit #4. The 85 `http_*` series are mostly the cost of widening the latency histogram from 3 to 14 buckets, without which neither latency target is measurable |
 | End-to-end latency p50 / max (real model, **partial**) | ~1k-token doc **6.6 s / 28.3 s** (n = 8) · ~2.3k-token doc **5.7 s / 13.2 s** (n = 4) · ~6k-token: no successful call; platform overhead p50 **57–94 ms** | p50 ≤ 3 s, p99 ≤ 8 s ❌ | `latency_sample.py`, Gemini 3.8 Flash **free tier**, 8 Oct; 18 of 30 calls refused by the provider's quota (recorded as failures, not retried). Model time is > 98 % of the total; the free tier's queueing dominates. Re-run on a paid key for a full sample |
 | End-to-end latency p50 / max (real model, Groq) | ~1k-token doc **0.50 s / 0.63 s** (n = 10) · ~2.3k **0.73 s / 1.54 s** (n = 10) · ~4.4k **0.82 s / 1.08 s** (n = 6); platform overhead p50 **64–133 ms** | p50 ≤ 3 s, p99 ≤ 8 s ✅ | `latency_sample.py`, `qwen/qwen3.8-27b` on Groq's **free tier**, 30 requests paced 20 s apart, 8 Oct; 26 of 30 succeeded, 4 long documents refused by the tokens-per-minute cap (recorded as failures, not retried). Same pipeline as the Gemini row: the difference between the two rows is the provider |
-| End-to-end latency p50 / p95 / p99 in **production** (Render + Neon, real Gemini) | **2,273 / 25,660 / 25,660 ms**; 3 of 15 requests over 8 s. Platform overhead p50 **~860 ms** (range 767–1,126 ms) | p50 ≤ 3 s ✅, p99 ≤ 8 s ❌, overhead p99 ≤ 25 ms ❌ | Exact percentiles over `request_logs` on the deployment, n = 15 successful calls, 8 Oct — at that n the p95 and p99 are both just the slowest call, so read them as "the tail reached 25 s", not as a stable percentile. The cause is **cross-region database round trips, not CPU**: the pipeline makes ~19 database calls per request, `render.yaml` pinned no region so Render defaulted to Oregon while Neon is in `aws-us-east-2` (Ohio), and 19 × ~50 ms RTT ≈ 950 ms matches the measured gap. DESIGN.md §5 limit #1 dominating in production while invisible locally. The fix (`region: ohio`) is in review and **the re-measurement is still owed** |
-| Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 2 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 50 benign, `GUARDRAIL_LLM=off` |
-| Red-team **held-out** set (20 reworded attacks, never used for tuning) | heuristics **5 %** before / 65 % after generic rules; cascade with every instruction classified **90 %** (old rules) / **100 %** (new rules) | — | `evals/redteam/heldout.jsonl`; the set is now seen, a fresh one is needed for the next honest number |
-| Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %**; classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier |
+| End-to-end latency p50 / p95 / p99 in **production** (Render + Neon, real Gemini) | **2,273 / 25,660 / 25,660 ms**; 3 of 15 requests over 8 s. Platform overhead p50 **~860 ms** (range 767–1,126 ms) | p50 ≤ 3 s ✅, p99 ≤ 8 s ❌, overhead p99 ≤ 25 ms ❌ | Exact percentiles over `request_logs` on the deployment, n = 15 successful calls, 8 Oct — at that n the p95 and p99 are both just the slowest call, so read them as "the tail reached 25 s", not as a stable percentile. The cause is **cross-region database round trips, not CPU**: the pipeline makes ~19 database calls per request, `render.yaml` pinned no region so Render defaulted to Oregon while Neon is in `aws-us-east-2` (Ohio), and 19 × ~50 ms RTT ≈ 950 ms matches the measured gap. DESIGN.md §5 limit #1 dominating in production while invisible locally. The fix (`region: ohio`) is merged and deployed; **the re-measurement is still owed** |
+| Red-team catch rate / false-positive rate / added latency (heuristics only) | **96 % / 1.5 %** / p50 0.10 ms, p99 0.41 ms | ≥ 90 % / ≤ 5 % ✅ | `evals/redteam`, 50 attacks / 65 benign (15 of them editorial instructions naming document regions), `GUARDRAIL_LLM=off` |
+| Red-team **held-out v1** (20 reworded attacks; used during rule development) | heuristics **5 %** before / 65 % after rules written against it; cascade with every instruction classified **90 %** (old rules) / **100 %** (new rules) | — | `evals/redteam/heldout.jsonl`; seen by the rules, so not a generalisation number |
+| Red-team **held-out v2** (20 unseen attacks + 10 benign look-alikes) | heuristics only: catch **0 %** (0/20), FPR **0 %** (0/10); cascade: pending a classifier run | — | `evals/redteam/heldout_v2.jsonl`, reported by `make eval-redteam`, never gated or tuned against. The regex layer does not generalise to unseen paraphrases; the LLM classifier is the layer for that |
+| Red-team catch rate / false-positive rate (cascade) | **96 % / 2 %** (on the 50/50 set, before the editorial cases); classifier 12/12 correct on the uncertain band; $0.014 per 1,000 requests; p50 1.33 s when consulted | ≥ 90 % / ≤ 5 % ✅ | `python -m evals.redteam.run --llm on`, gemini-3.5-flash-lite, free tier |
 | Summarization faithfulness / coverage (LLM judge, 1–5) | `summarize_v1` **4.93 / 4.07**, hit rate 0.91 · `summarize_v2` **4.97 / 4.03**, hit rate 0.95 · **0 injection leaks** either way | ≥ 4.0 / ≥ 3.5 ✅ | 30-case Groq golden set, identical judge and rubric for both versions. v2 wins on faithfulness and key-point hit rate, v1 marginally on coverage, and v2 runs longer (15/30 over 120 words vs 7/30) at $0.00178 vs $0.00157 per request |
 
 Traffic-control micro-benchmarks: rate-limit check p50 747 µs / p99 1,404 µs on Postgres;
 fixed-window edge burst measured at exactly the 2.0× rpm bound D3 accepts; image 460 MB; local cold
 start 1.1 s.
 
-**Not yet measured:** the burst against the deployment (needs a live URL and its `ADMIN_TOKEN`), and
+**Not yet measured:** the burst against the deployment (needs its `ADMIN_TOKEN` to set a test budget), and
 production latency *after* the region fix — the ~860 ms overhead row above is the before. Alert
 rules for these signals are in [`ops/alerts.yml`](ops/alerts.yml).
 
@@ -510,7 +523,8 @@ rules for these signals are in [`ops/alerts.yml`](ops/alerts.yml).
 `/metrics` exposes `ledgerllm_cost_microusd_total{tenant,model,purpose}`, `ledgerllm_tokens_total`,
 `ledgerllm_rejections_total{reason}`, `ledgerllm_llm_latency_seconds`, `ledgerllm_guardrail_verdicts_total`,
 `ledgerllm_feedback_total`, `ledgerllm_quality_score{prompt_version,dimension}`, plus HTTP request counts and
-latency histograms. Grafana dashboards are provisioned
+latency histograms. These are labelled by tenant id, so `/metrics` is not public: with `METRICS_TOKEN` set it needs
+that bearer token, and without one it is open only in dev/test (the docker-compose Prometheus). Grafana dashboards are provisioned
 from `ops/grafana/dashboards/`. Logs are JSON with a `request_id` on every line; the `request_logs` (redacted)
 and `audit_events` tables explain every refusal after the fact.
 
@@ -532,7 +546,9 @@ Docker image (`Dockerfile`) deployed as a Render web service via `render.yaml`, 
 (step-by-step runbook: [`docs/DEPLOY.md`](docs/DEPLOY.md)).
 Configuration is entirely environment variables: `DATABASE_URL`, `LLM_PROVIDER`, `LLM_API_KEY`,
 `ADMIN_TOKEN`, `GUARDRAILS_MODE`, `GUARDRAIL_LLM`, `QUALITY_SAMPLE_RATE`, `SUMMARIZE_PROMPT_VERSION`,
-`RESPONSE_CACHE_ENABLED`. Merges to `main` deploy automatically once CI
+`RESPONSE_CACHE_ENABLED`, `MAX_REQUEST_BYTES`, `METRICS_TOKEN`, `FORWARDED_ALLOW_IPS` (proxies whose
+`X-Forwarded-For` uvicorn trusts; `*` on Render). `GET /healthz` reports the deployed commit as `version`
+(`RENDER_GIT_COMMIT`, or `GIT_COMMIT`). Merges to `main` deploy automatically once CI
 and both eval gates pass. The app is stateless, so it scales horizontally without changes.
 
 ## Repository layout

@@ -1,4 +1,4 @@
-"""Real-provider latency sample. OWNER: Yashraj.
+"""Real-provider latency sample.
 
 The burst test (locustfile.py) deliberately runs on the mock provider: the claim under test there is
 our quota logic, not Google's response time (decision D8). That leaves a second number to produce --

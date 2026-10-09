@@ -4,7 +4,7 @@ Everything is read from the ledger (the source of truth for cost attribution) ex
 which come from the budget row that admission control uses. Online-judge rows (D17) are attributed to
 the tenant but paid by the platform: they are listed with billed=false and left out of every cost,
 token and request total, so the totals reconcile with `spent`. Money stays integer micro-USD until the
-response layer. Days are UTC calendar days on both SQLite and Postgres. OWNER: Naresh.
+response layer. Days are UTC calendar days on both SQLite and Postgres.
 """
 
 from __future__ import annotations

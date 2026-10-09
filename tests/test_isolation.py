@@ -1,4 +1,4 @@
-"""Tenant isolation. OWNER: Loukik — usage, feedback, idempotency and admin routes."""
+"""Tenant isolation: usage, feedback, idempotency and admin routes."""
 
 from tests.conftest import ADMIN, make_tenant, summarize
 

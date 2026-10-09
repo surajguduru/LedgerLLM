@@ -1,6 +1,6 @@
 """Structured audit events. One row per security- or billing-relevant decision.
 
-Audit policy (owner: Loukik): refusals caused by the *tenant* are audited;
+Audit policy: refusals caused by the *tenant* are audited;
 infrastructure noise is logged only (request log, no audit row).
 
 Audited: rate_limited, budget_exceeded, blocked_input, output_moderated,

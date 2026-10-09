@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +50,14 @@ class Settings(BaseSettings):
 
     # Admin
     admin_token: str = DEFAULT_ADMIN_TOKEN
+    # /metrics lists every tenant's spend. Set: it needs `Authorization: Bearer <token>`. Unset: open in
+    # dev/test (docker-compose's Prometheus scrapes it), 404 anywhere else (see app/observability/metrics.py).
+    metrics_token: str | None = None
+
+    # The deployed commit, shown by /healthz. Render sets RENDER_GIT_COMMIT; elsewhere set GIT_COMMIT.
+    git_commit: str | None = Field(
+        None, validation_alias=AliasChoices("RENDER_GIT_COMMIT", "GIT_COMMIT")
+    )
 
     # Tenant portal (/app): session lifetime, and whether the cookie is HTTPS-only. None = secure
     # everywhere except APP_ENV dev/test, where the app is served over plain http://localhost.
@@ -86,6 +95,11 @@ class Settings(BaseSettings):
     quality_sample_rate: float = 0.05
     quality_judge_model: str | None = None  # defaults to DEFAULT_MODEL
     quality_judge_min_interval_s: float = 6.0
+
+    # Largest request body accepted, in bytes (413 content_too_large above it). The largest plan
+    # summarises up to 600k characters (enterprise map_reduce_max_chars); as JSON that is at most
+    # 6 bytes per character (\uXXXX escapes), so 4 MB leaves room without letting 40 MB in.
+    max_request_bytes: int = 4_000_000
 
     # URL fetching
     fetch_timeout_s: float = 10.0
